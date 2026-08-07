@@ -67,7 +67,9 @@ module Restless
     # coincide and the result is still well-formed UTF-8.
     RE_DIGIT_WORD = Regexp.new("\\b[#{WORD}\\-]*[0-9][#{WORD}\\-]*\\b").freeze
 
-    Result = Struct.new(:strategy, :key, :reason)
+    # `previous_key` is FP-047 and is set ONLY by the stack strategy. It goes
+    # on the wire as `previousKey` and is omitted when nil.
+    Result = Struct.new(:strategy, :key, :reason, :previous_key)
 
     module_function
 
@@ -123,7 +125,11 @@ module Restless
       if status >= 500 && stack_frame
         return Result.new(
           "stack", "#{status}:#{stack_frame[:file]}:#{stack_frame[:fn]}",
-          "top user frame: #{stack_frame[:fn]} in #{stack_frame[:file]}"
+          "top user frame: #{stack_frame[:fn]} in #{stack_frame[:file]}",
+          # FP-047. What this error keyed on before the stack strategy became
+          # reachable, so a recovery message already attached to that key
+          # survives the move.
+          fallback_key(status, method, route, response_body)
         )
       end
 
@@ -138,6 +144,20 @@ module Restless
       # 5. Status + route only. Coarse, but it groups all unhandled responses.
       Result.new("route-only", "#{status}:#{method}:#{normalized_route}",
                  "no usable code or message; falling back to status + route")
+    end
+
+    # FP-047. The key rungs 4 and 5 of the ladder would produce.
+    #
+    # Factored out rather than duplicated so the stack strategy can report what
+    # it DISPLACED without re-running the ladder: turning that strategy on
+    # moves the key for every uncaught 5xx, and a moved key silently orphans
+    # the Agent Recovery message a customer attached to the old one.
+    def fallback_key(status, method, route, response_body)
+      normalized_route = normalize_route(route)
+      msg = normalize_message(extract_message(response_body))
+      return "#{status}:#{method}:#{normalized_route}" if msg.empty?
+
+      "#{status}:#{method}:#{normalized_route}:#{msg}"
     end
 
     # FP-017. The header name is matched case-insensitively.
@@ -246,39 +266,42 @@ module Restless
         SEG_LONG_HEX.match?(segment)
     end
 
-    # FP-042. Strip the absolute path prefix down to a project-relative path,
-    # so the same source file produces the same key on a laptop and in
+    # FP-042. Strip the machine-specific path prefix down to a project-relative
+    # path, so the same source file produces the same key on a laptop and in
     # production.
     #
-    # Hand-rolled rather than regex because the reference is
-    # `/\/(?:src|lib|app|api|routes|controllers|handlers)\/.+$/` and JavaScript's
-    # `.` excludes CR, LS and PS as well as LF while Ruby's excludes only LF.
-    # A path containing a stray CR would therefore take a different branch.
-    # The semantics are: the FIRST `/marker/` whose remainder is non-empty and
-    # free of JavaScript line terminators.
+    # The LAST project directory wins, not the first, and the difference is the
+    # whole point:
     #
-    # KNOWN DEFECT, reproduced deliberately. Because the first match wins, a
-    # deployment root that is itself named after a marker (Docker
-    # `WORKDIR /app`, Heroku) survives into the key, so production and laptop
-    # fingerprints diverge for the same file. See the note under FP-042; the
-    # fix is a CHANGE-003 coordinated change and is NOT in spec 1.0.0.
+    #   /Users/dev/proj/src/db/users.rb     -> src/db/users.rb
+    #   /app/src/db/users.rb                -> src/db/users.rb
+    #   /opt/render/project/src/db/users.rb -> src/db/users.rb
+    #
+    # A first-match rule returns `app/src/db/users.rb` for the middle one,
+    # because the deployment root IS the first match. Docker's conventional
+    # `WORKDIR /app` and Heroku both root there, so first-match made production
+    # disagree with a laptop for the same file across the most common
+    # containerized layout there is, defeating the only thing this function
+    # exists to do.
+    #
+    # The trade is that a nested layout (`/proj/src/a/src/x.rb`) collapses to
+    # `src/x.rb` rather than `src/a/src/x.rb`. That is far rarer than an `/app`
+    # root and is still machine-independent, which is the property being
+    # protected.
     def project_relative(file)
-      pos = 0
-      while (idx = file.index("/", pos))
-        PROJECT_DIRS.each do |marker|
-          next unless file[idx + 1, marker.length] == marker
-          next unless file[idx + 1 + marker.length] == "/"
-
-          rest = file[(idx + 2 + marker.length)..-1]
-          next if rest.nil? || rest.empty?
-          next if rest.each_char.any? { |c| Text.js_line_terminator?(c) }
-
-          return file[(idx + 1)..-1]
-        end
-        pos = idx + 1
+      # `split("/", -1)`: Ruby drops trailing empty fields without the negative
+      # limit, so `/proj/src/` would come back as ["", "proj", "src"] and take
+      # the fallback branch where JavaScript, which keeps the empty field,
+      # matches `src` and returns "src/".
+      segments = file.split("/", -1)
+      # Stop before the final component: a project dir has to have something
+      # after it to be a directory at all. A negative start makes `downto`
+      # yield nothing, which is correct for a bare filename.
+      (segments.length - 2).downto(0) do |i|
+        return segments[i..-1].join("/") if PROJECT_DIRS.include?(segments[i])
       end
 
-      file.split("/", -1).last(2).join("/")
+      segments.last(2).join("/")
     end
   end
 end

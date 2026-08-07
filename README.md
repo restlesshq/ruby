@@ -72,7 +72,9 @@ and body your app produced rather than an inner layer's.
   and a `debug` block in the JSON body. If someone attaches a "next steps"
   message to an error in the dashboard, the SDK injects it as
   `debug.recovery` - read synchronously from an in-process cache, never
-  blocking the response on a network call.
+  blocking the response on a network call. A 5xx that groups by its throw
+  site also reports the key it would have grouped under otherwise, so a
+  message you attached before that grouping existed keeps being injected.
 - **Blocking.** Return `{ block: true }` from the setup callback to reject a
   request before your handler runs, or
   `{ block: { status: 402, message: "Payment required" } }` to pick the

@@ -48,14 +48,6 @@ module Restless
     # right.
     WORD_CLASS = "A-Za-z0-9_"
 
-    # JavaScript line terminators. `.` in a JS regex excludes all four; Ruby's
-    # `.` excludes only LF. `project_relative` depends on the difference.
-    JS_LINE_TERMINATOR_CODEPOINTS = [0x000A, 0x000D, 0x2028, 0x2029].freeze
-    JS_LINE_TERMINATORS =
-      JS_LINE_TERMINATOR_CODEPOINTS.map { |cp| [cp].pack("U") }.freeze
-    JS_LINE_TERMINATOR_SET =
-      JS_LINE_TERMINATORS.each_with_object({}) { |c, h| h[c] = true }.freeze
-
     REPLACEMENT_CHAR = [0xFFFD].pack("U")
 
     module_function
@@ -147,10 +139,6 @@ module Restless
 
     def ws?(char)
       WS_SET.key?(char)
-    end
-
-    def js_line_terminator?(char)
-      JS_LINE_TERMINATOR_SET.key?(char)
     end
 
     # `String.prototype.trim` semantics: strip exactly the PRIM-002 set.

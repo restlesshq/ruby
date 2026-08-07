@@ -247,14 +247,14 @@ module Restless
         # response, snapshotted before any injected header or body field.
         fingerprint = @engine.compute_fingerprint(captured, stack_frame)
         if fingerprint
-          captured["errorFingerprint"] = {
-            "strategy" => fingerprint.strategy,
-            "key" => fingerprint.key,
-            "reason" => fingerprint.reason
-          }
+          captured["errorFingerprint"] = CaptureEngine.wire_fingerprint(fingerprint)
           # INJECT-010: computed once and reused for both the recovery lookup
           # and the upload payload.
-          recovery = @engine.lookup_recovery(fingerprint.key)
+          #
+          # FP-047: the fingerprint-aware lookup, not the key-only one, so a
+          # message still attached to the pre-stack-strategy key keeps being
+          # injected while the group migrates.
+          recovery = @engine.lookup_recovery_for(fingerprint)
         end
 
         injection = safely(nil) do

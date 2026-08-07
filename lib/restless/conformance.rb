@@ -3,6 +3,7 @@
 require_relative "mask"
 require_relative "redact"
 require_relative "fingerprint"
+require_relative "stack_frames"
 require_relative "har"
 require_relative "request_id"
 require_relative "injection"
@@ -57,7 +58,16 @@ module Restless
         Fingerprint.normalize_route(str_or_nil(input["route"]))
       when "normalizeMessage"
         Fingerprint.normalize_message(str(input["message"]))
-      when "projectRelative"
+      when "fallbackKey"
+          # FP-047's derivation, dialect-free: every case reaching it through
+          # `fingerprint` carries a v8 stack this SDK must skip (FP-046).
+          Fingerprint.fallback_key(
+            int(input["status"]),
+            str_or_nil(input["method"]) || "GET",
+            str_or_nil(input["route"]),
+            input["responseBody"]
+          )
+        when "projectRelative"
         # FP-042 is shared across every SDK even though frame PARSING is not
         # (FP-044/FP-046), so path normalization gets its own dialect-free op.
         Fingerprint.project_relative(str(input["file"]))
@@ -95,17 +105,27 @@ module Restless
               "unsupported stack dialect: v8 (this SDK parses Ruby backtraces; FP-044/FP-046)"
       end
 
+      # Parse the stack the way the Rack adapter does. This used to pass
+      # nil, which made the driver structurally incapable of reaching the
+      # stack strategy: the whole path was dead through the harness while
+      # the SDK's own tests, which call StackFrames directly, still passed.
+      # Nothing caught it, because every v8-shaped stack vector is skipped
+      # under FP-046 so the harness never exercises this branch. A driver
+      # that short-circuits the SDK is testing itself.
       result = Fingerprint.compute(
         status: int(input["status"]),
         method: str_or_nil(input["method"]),
         route: str_or_nil(input["route"]),
         response_headers: input["responseHeaders"].is_a?(Hash) ? input["responseHeaders"] : nil,
         response_body: input["responseBody"],
-        stack_frame: nil
+        stack_frame: stack.empty? ? nil : StackFrames.top_user_frame(stack.split("\n"))
       )
       # FP-003: `reason` is human-facing prose, explicitly not contract
-      # surface, so drivers must not emit it.
-      { "strategy" => result.strategy, "key" => result.key }
+      # surface, so drivers must not emit it. FP-047's `previousKey` IS
+      # contract surface, and is emitted only when the stack strategy set one.
+      out = { "strategy" => result.strategy, "key" => result.key }
+      out["previousKey"] = result.previous_key if result.previous_key
+      out
     end
 
     def stack_text(raw)

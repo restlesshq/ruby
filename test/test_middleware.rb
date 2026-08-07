@@ -86,6 +86,31 @@ class TestMiddleware < Minitest::Test
     previous.each { |k, v| v.nil? ? ENV.delete(k) : ENV[k] = v }
   end
 
+  # FP-047 fixtures. `Exploder` lives under a `src/` directory, so FP-042
+  # rewrites its path to `src/exploder.rb` on any machine.
+  STACK_KEY = "500:src/exploder.rb:detonate"
+  # What the ladder produces without the stack strategy: the `message` rung,
+  # against the normalized route and the normalized response message.
+  STACK_PREVIOUS_KEY = "500:GET:/boom:the-widget-frobnicator-is-on-fire"
+
+  # A 500 the framework caught itself. It leaves the exception in the Rack env,
+  # which is the only way to reach the `stack` strategy for a handled error,
+  # and unlike an uncaught raise it still runs the injection path.
+  def handled_500_app
+    lambda do |env|
+      env["sinatra.route"] = "GET /boom"
+      begin
+        Exploder.detonate
+      rescue StandardError => e
+        env["rack.exception"] = e
+      end
+      body = JSON.generate("message" => "the widget frobnicator is on fire")
+      [500,
+       { "Content-Type" => "application/json", "Content-Length" => body.bytesize.to_s },
+       [body]]
+    end
+  end
+
   def json_app(status, payload, route: nil)
     lambda do |env|
       env["sinatra.route"] = route if route
@@ -304,6 +329,59 @@ class TestMiddleware < Minitest::Test
     # WIRE-023: the docs origin is learned from the server, trailing slash
     # stripped, and used for injected links from then on.
     assert headers["x-log-url"].start_with?("http://docs.test/logs/")
+  end
+
+  # FP-047. Turning the `stack` strategy on MOVES the key for every uncaught
+  # 5xx, which would silently orphan whatever Agent Recovery message the
+  # customer had already attached to the old one. The fingerprint therefore
+  # carries the displaced key, the uploader sends BOTH so the ingest can answer
+  # for either, and the lookup falls back to it.
+  #
+  # This is the whole transition in one test: the message is attached ONLY to
+  # the pre-stack-strategy key and must still be injected.
+  def test_a_recovery_message_on_the_previous_key_is_still_injected
+    recorder = Recorder.new("recoveryMessages" => { STACK_PREVIOUS_KEY => "Retry with a smaller page." })
+    c = client(recorder)
+    c.setup { |_req| {} }
+    mw = c.rack.new(handled_500_app)
+
+    mw.call(env_for("/boom"))
+    c.flush
+
+    fingerprint = recorder.entries.first["errorFingerprint"]
+    assert_equal "stack", fingerprint["strategy"]
+    assert_equal STACK_KEY, fingerprint["key"]
+    # The displaced key rides along on the wire so the ingest can answer for it.
+    assert_equal STACK_PREVIOUS_KEY, fingerprint["previousKey"]
+
+    # Second occurrence: the current key is a confirmed miss, so the lookup
+    # falls back. Reaching the cache at all also proves the uploader sent the
+    # previous key, since only keys in the batch are cached from a response.
+    _, _, body = mw.call(env_for("/boom"))
+    c.flush
+    assert_includes JSON.parse(body.join)["debug"]["recovery"], "Retry with a smaller page."
+  end
+
+  # FP-047. The current key is preferred, so a message attached to the NEW
+  # group wins the moment one exists and the transitional fallback stops
+  # mattering.
+  def test_a_message_on_the_current_key_wins_over_the_previous_key
+    recorder = Recorder.new("recoveryMessages" => {
+                              STACK_KEY => "Current guidance.",
+                              STACK_PREVIOUS_KEY => "Stale guidance."
+                            })
+    c = client(recorder)
+    c.setup { |_req| {} }
+    mw = c.rack.new(handled_500_app)
+
+    mw.call(env_for("/boom"))
+    c.flush
+
+    _, _, body = mw.call(env_for("/boom"))
+    c.flush
+    recovery = JSON.parse(body.join)["debug"]["recovery"]
+    assert_includes recovery, "Current guidance."
+    refute_includes recovery, "Stale guidance."
   end
 
   # CACHE-001, CACHE-003.

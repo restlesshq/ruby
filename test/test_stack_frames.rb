@@ -107,14 +107,16 @@ class TestStackFrames < Minitest::Test
     ]
     frame = Restless::StackFrames.top_user_frame(backtrace)
     assert_equal "show", frame[:fn]
-    assert_equal "app/controllers/pets_controller.rb", frame[:file]
+    # FP-042 takes the LAST project dir, so a Rails `app/controllers` layout
+    # keys on `controllers/...` rather than carrying `app/` along.
+    assert_equal "controllers/pets_controller.rb", frame[:file]
   end
 
   # FP-045.
   def test_anonymous_when_the_method_cannot_be_determined
     frame = Restless::StackFrames.top_user_frame(["/srv/app/src/boot.rb:4"])
     assert_equal "anonymous", frame[:fn]
-    assert_equal "app/src/boot.rb", frame[:file]
+    assert_equal "src/boot.rb", frame[:file]
   end
 
   # Ruby 3.4 changed the frame label quoting from `method' to 'method'. Both
@@ -132,23 +134,67 @@ class TestStackFrames < Minitest::Test
     assert_nil Restless::StackFrames.top_user_frame(nil)
   end
 
-  # Known deviation from intent, reproduced deliberately. See the FP-042 note
-  # in CONTRACT.md: because the FIRST project-dir segment wins, a deployment
-  # root named /app (Docker WORKDIR, Heroku) survives into the key, so
-  # production and laptop fingerprints diverge for the same file.
+  # FP-042. The ONLY thing project_relative exists to do: the same source file
+  # keys identically wherever it is deployed. The LAST project dir wins, so a
+  # deployment root that is itself named after one (Docker `WORKDIR /app`,
+  # Heroku) does not survive into the key.
   #
-  # This SDK matches the reference on purpose. The moment the reference is
-  # fixed, this test starts failing and says why.
-  def test_project_relative_reproduces_the_reference_defect
+  # A first-match rule resolves the middle two to `app/src/db/users.rb` and
+  # makes production disagree with a laptop for the same file, which is what
+  # this used to do.
+  def test_project_relative_is_machine_independent
     laptop = Restless::Fingerprint.project_relative("/Users/dev/proj/src/db/users.rb")
     docker = Restless::Fingerprint.project_relative("/app/src/db/users.rb")
+    render = Restless::Fingerprint.project_relative("/opt/render/project/src/db/users.rb")
 
     assert_equal "src/db/users.rb", laptop
-    assert_equal "app/src/db/users.rb", docker
-    refute_equal laptop, docker,
-                 "The reference defect under FP-042 appears to be fixed. That is " \
-                 "a CHANGE-003 coordinated change: update project_relative to " \
-                 "match the LAST project-dir segment, regenerate nothing here, " \
-                 "and re-run the shared vectors."
+    assert_equal laptop, docker,
+                 "A Docker WORKDIR /app root must not change the fingerprint"
+    assert_equal laptop, render
+  end
+
+  # FP-042's accepted trade: a nested layout collapses to the LAST marker
+  # rather than keeping the intermediate path. Rarer than an /app root, and
+  # still machine-independent, which is the property that matters.
+  def test_project_relative_takes_the_last_marker
+    assert_equal "src/c.rb", Restless::Fingerprint.project_relative("/a/src/b/src/c.rb")
+    # No marker at all: the last two components.
+    assert_equal "place/thing.rb", Restless::Fingerprint.project_relative("/opt/weird/place/thing.rb")
+    # A marker as the FINAL component is a file, not a directory, so the scan
+    # stops before it.
+    assert_equal "proj/src", Restless::Fingerprint.project_relative("/home/proj/src")
+    assert_equal "thing.rb", Restless::Fingerprint.project_relative("thing.rb")
+    assert_equal "/thing.rb", Restless::Fingerprint.project_relative("/thing.rb")
+    # `split("/", -1)`: without the negative limit Ruby drops the trailing
+    # empty field, the scan misses `src`, and this returns "proj/src".
+    assert_equal "src/", Restless::Fingerprint.project_relative("/home/proj/src/")
+  end
+
+  # FP-047. The stack strategy displaces whatever the lower rungs would have
+  # produced, so it reports the key it displaced. Nothing else sets one.
+  def test_stack_strategy_reports_the_key_it_displaced
+    frame = { file: "src/db/users.rb", fn: "find" }
+
+    with_message = Restless::Fingerprint.compute(
+      status: 500, method: "POST", route: "/pets",
+      response_body: { "message" => "Something came apart" }, stack_frame: frame
+    )
+    assert_equal "500:src/db/users.rb:find", with_message.key
+    assert_equal "500:POST:/pets:something-came-apart", with_message.previous_key
+
+    # No extractable message, so the route-only rung is what was displaced.
+    without_message = Restless::Fingerprint.compute(
+      status: 500, method: "POST", route: "/pets", stack_frame: frame
+    )
+    assert_equal "500:POST:/pets", without_message.previous_key
+
+    # Nothing displaced, nothing to report.
+    no_stack = Restless::Fingerprint.compute(
+      status: 500, method: "POST", route: "/pets",
+      response_body: { "message" => "Something came apart" }
+    )
+    assert_equal "message", no_stack.strategy
+    assert_nil no_stack.previous_key
+    assert_nil Restless::Fingerprint.compute(status: 404, route: "/pets/{id}").previous_key
   end
 end

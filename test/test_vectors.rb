@@ -126,7 +126,7 @@ class TestVectors < Minitest::Test
 
     # A sanity floor: if a refactor ever stops loading vectors, the assertion
     # above passes vacuously. This makes that failure loud.
-    assert_operator passed, :>=, 198,
+    assert_operator passed, :>=, 199,
                     "only #{passed} vectors passed (#{skipped.length} skipped)"
   end
 
