@@ -35,8 +35,12 @@ class TestStackFrames < Minitest::Test
   # empirically rather than assuming it.
   def test_backtrace_is_innermost_first
     trace = raised.backtrace
-    throw_site = trace.index { |line| line =~ /:in [`']detonate'\z/ }
-    caller_site = trace.index { |line| line =~ /:in [`']outer'\z/ }
+    # Matches the RAW backtrace line, so it sees the label exactly as the
+    # running Ruby emits it. 3.4 qualifies the method with its receiver
+    # (`Exploder.detonate`), 3.3 and earlier do not; both have to match or
+    # this test only passes on the Ruby it was written against.
+    throw_site = trace.index { |line| line =~ /:in [`'](?:[\w:]+[.#])?detonate'\z/ }
+    caller_site = trace.index { |line| line =~ /:in [`'](?:[\w:]+[.#])?outer'\z/ }
 
     assert_equal 0, throw_site,
                  "Ruby backtraces are expected to be innermost-FIRST (like v8 and " \
@@ -121,11 +125,48 @@ class TestStackFrames < Minitest::Test
 
   # Ruby 3.4 changed the frame label quoting from `method' to 'method'. Both
   # dialects have to parse, because this gem supports 2.7 through current.
+  #
+  # 3.4 made TWO changes to the label, and the quoting is only the visible
+  # one. It also began qualifying the method with its receiver. Both halves
+  # have to be undone here or the same crash keys differently across a Ruby
+  # upgrade, so this asserts the qualified form collapses to the bare one.
   def test_parses_both_quote_styles
     old = Restless::StackFrames.parse_frame("/a/src/x.rb:9:in `run'")
     new = Restless::StackFrames.parse_frame("/a/src/x.rb:9:in 'Klass#run'")
     assert_equal "run", old[:fn]
-    assert_equal "Klass#run", new[:fn]
+    assert_equal "run", new[:fn]
+    assert_equal old[:fn], new[:fn], "same method, different Ruby, same key"
+  end
+
+  # The tests above run against a REAL backtrace, so each one only ever
+  # exercises the label format of the interpreter running it. These feed both
+  # formats in as strings, so a single `rake test` covers the 3.4 change on
+  # every supported Ruby instead of only on the newest one in the CI matrix.
+  def test_receiver_qualified_labels_key_the_same_as_unqualified
+    {
+      "detonate" => "detonate",                          # <= 3.3
+      "Exploder.detonate" => "detonate",                 # 3.4 singleton
+      "Exploder#detonate" => "detonate",                 # 3.4 instance
+      "Deep::Nested::Thing#detonate" => "detonate",      # 3.4 namespaced
+      "block (3 levels) in run" => "block in run",       # <= 3.3
+      "block (3 levels) in Exploder#run" => "block in run", # 3.4
+    }.each do |label, expected|
+      parsed = Restless::StackFrames.parse_frame("/a/src/x.rb:9:in '#{label}'")
+      assert_equal expected, parsed[:fn], "label #{label.inspect}"
+    end
+  end
+
+  # The receiver strip is a prefix rule, so it must not chew into labels that
+  # merely contain a dot or a hash, or into Ruby's own synthetic frames.
+  def test_unqualified_and_synthetic_labels_are_left_alone
+    {
+      "/a/src/x.rb:1:in `<main>'" => "<main>",
+      "/a/src/x.rb:1:in `<module:Foo>'" => "<module:Foo>",
+      "/a/src/x.rb:1:in `run'" => "run",
+      "/a/src/x.rb:1:in `each'" => "each",
+    }.each do |line, expected|
+      assert_equal expected, Restless::StackFrames.parse_frame(line)[:fn], line
+    end
   end
 
   def test_no_user_frame_returns_nil
