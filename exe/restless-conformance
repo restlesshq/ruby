@@ -1,0 +1,108 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# The Ruby conformance driver. See node-sdk/spec/driver/PROTOCOL.md.
+#
+# Dev-only: it is a thin shell over Restless::Conformance, which
+# test/test_vectors.rb also uses, so the vectors cannot describe behaviour the
+# driver does not exhibit. No customer ever runs it.
+#
+#     bundle exec restless-conformance      # or just: ruby exe/restless-conformance
+#
+# Reads JSON Lines on stdin, writes JSON Lines on stdout, diagnostics on
+# stderr, and exits 0 when stdin closes.
+
+$LOAD_PATH.unshift(File.expand_path("../lib", __dir__))
+
+require "json"
+require "restless/conformance"
+
+UNSUPPORTED_SURROGATE = <<~MSG.tr("\n", " ").strip
+  unsupported: input line contains an unpaired surrogate escape. Ruby's JSON
+  parser raises on one and a Ruby String has no representation for it, so the
+  value is unreachable before any SDK code runs (PRIM-035).
+MSG
+
+# PRIM-035 / PROTOCOL.md "Skips".
+#
+# Checked on the RAW LINE, because this is a TRANSPORT limit rather than an SDK
+# one: `JSON.parse('"\ud83d"')` raises `JSON::ParserError: incomplete surrogate
+# pair`, and `"\u{d83d}"` is not even a legal Ruby literal. Reporting
+# `unsupported` for the whole line is what the protocol asks for; reporting a
+# parse error would look like a conformance failure, and silently substituting
+# U+FFFD would compare a value the harness never sent.
+def lone_surrogate_escape?(line)
+  hex4 = /\A[0-9a-fA-F]{4}\z/
+  index = 0
+  while (at = line.index("\\u", index))
+    hex = line[at + 2, 4]
+    unless hex && hex4.match?(hex)
+      index = at + 2
+      next
+    end
+
+    code = hex.to_i(16)
+    if code >= 0xD800 && code <= 0xDBFF
+      # A high surrogate is fine only if a low one follows immediately.
+      low_hex = line[at + 8, 4]
+      if line[at + 6, 2] == "\\u" && low_hex && hex4.match?(low_hex)
+        low = low_hex.to_i(16)
+        if low >= 0xDC00 && low <= 0xDFFF
+          index = at + 12
+          next
+        end
+      end
+      return true
+    end
+    return true if code >= 0xDC00 && code <= 0xDFFF
+
+    index = at + 6
+  end
+  false
+end
+
+# Best-effort extraction so the harness can still correlate a response for a
+# line we refuse to fully decode.
+def raw_id_token(line)
+  match = /"id"\s*:\s*("(?:[^"\\]|\\.)*"|-?\d+(?:\.\d+)?|true|false|null)/.match(line)
+  match ? match[1] : "null"
+end
+
+def emit(line)
+  $stdout.write("#{line}\n")
+  $stdout.flush
+end
+
+$stdout.sync = true
+$stdin.set_encoding(Encoding::UTF_8)
+$stdout.set_encoding(Encoding::UTF_8)
+
+while (line = $stdin.gets)
+  line = line.strip
+  next if line.empty?
+
+  if lone_surrogate_escape?(line)
+    emit(%({"id":#{raw_id_token(line)},"error":#{JSON.generate(UNSUPPORTED_SURROGATE)}}))
+    next
+  end
+
+  begin
+    request = JSON.parse(line, max_nesting: false)
+  rescue StandardError => e
+    emit(JSON.generate({ "id" => nil, "error" => "malformed request: #{e.message}" }))
+    next
+  end
+
+  id = request["id"]
+  begin
+    result = Restless::Conformance.dispatch(request["op"], request["input"])
+    emit(JSON.generate({ "id" => id, "result" => result }))
+  rescue Restless::Conformance::UnknownOp,
+         Restless::Conformance::UnsupportedDialect => e
+    emit(JSON.generate({ "id" => id, "error" => e.message }))
+  rescue StandardError => e
+    emit(JSON.generate({ "id" => id, "error" => "#{e.class}: #{e.message}" }))
+  end
+end
+
+exit 0
