@@ -116,6 +116,20 @@ module Restless
       nil
     end
 
+    # WIRE-017. The serialized form of a fingerprint.
+    #
+    # `Fingerprint::Result` is a Struct with symbol members, and the wire wants
+    # string keys, so the mapping has to be written somewhere. It is written
+    # once: the Rack middleware computes the fingerprint early (INJECT-009) and
+    # must serialize it identically to `record` below.
+    def self.wire_fingerprint(fingerprint)
+      {
+        "strategy" => fingerprint.strategy,
+        "key" => fingerprint.key,
+        "reason" => fingerprint.reason
+      }
+    end
+
     # Run the user's setup callback and resolve owner metadata.
     #
     # SAFETY-002: a callback that raises is caught and the request proceeds
@@ -219,13 +233,7 @@ module Restless
 
       if sanitized["errorFingerprint"].nil? && response["status"].to_i >= 400
         fingerprint = compute_fingerprint(sanitized, stack_frame)
-        if fingerprint
-          sanitized["errorFingerprint"] = {
-            "strategy" => fingerprint.strategy,
-            "key" => fingerprint.key,
-            "reason" => fingerprint.reason
-          }
-        end
+        sanitized["errorFingerprint"] = self.class.wire_fingerprint(fingerprint) if fingerprint
       end
 
       @uploader.push(sanitized)

@@ -86,6 +86,28 @@ class TestMiddleware < Minitest::Test
     previous.each { |k, v| v.nil? ? ENV.delete(k) : ENV[k] = v }
   end
 
+  # `Exploder` lives under a `src/` directory, so FP-042 rewrites its path to
+  # `src/exploder.rb` on any machine.
+  STACK_KEY = "500:src/exploder.rb:detonate"
+
+  # A 500 the framework caught itself. It leaves the exception in the Rack env,
+  # which is the only way to reach the `stack` strategy for a handled error,
+  # and unlike an uncaught raise it still runs the injection path.
+  def handled_500_app
+    lambda do |env|
+      env["sinatra.route"] = "GET /boom"
+      begin
+        Exploder.detonate
+      rescue StandardError => e
+        env["rack.exception"] = e
+      end
+      body = JSON.generate("message" => "the widget frobnicator is on fire")
+      [500,
+       { "Content-Type" => "application/json", "Content-Length" => body.bytesize.to_s },
+       [body]]
+    end
+  end
+
   def json_app(status, payload, route: nil)
     lambda do |env|
       env["sinatra.route"] = route if route
@@ -304,6 +326,36 @@ class TestMiddleware < Minitest::Test
     # WIRE-023: the docs origin is learned from the server, trailing slash
     # stripped, and used for injected links from then on.
     assert headers["x-log-url"].start_with?("http://docs.test/logs/")
+  end
+
+  # FP-010/FP-040 through the middleware, and the recovery round trip on top
+  # of it.
+  #
+  # A framework that catches the exception itself is the only way to reach the
+  # `stack` strategy with the injection path still running (an uncaught raise
+  # skips injection and re-raises), so this is the only coverage of
+  # EXCEPTION_ENV_KEYS.
+  def test_a_handled_500_keys_on_the_throw_site_and_injects_its_recovery
+    recorder = Recorder.new("recoveryMessages" => { STACK_KEY => "Retry with a smaller page." })
+    c = client(recorder)
+    c.setup { |_req| {} }
+    mw = c.rack.new(handled_500_app)
+
+    mw.call(env_for("/boom"))
+    c.flush
+
+    fingerprint = recorder.entries.first["errorFingerprint"]
+    # The response body carries a message, so rung 4 had something to key on.
+    # The stack rung outranks it, which is the point: prose keys split when a
+    # message is reworded and collide when two unrelated bugs read alike.
+    assert_equal "stack", fingerprint["strategy"]
+    assert_equal STACK_KEY, fingerprint["key"]
+
+    # Second occurrence: the key went up with the first batch, so the server's
+    # answer is cached against it and the message is injected without I/O.
+    _, _, body = mw.call(env_for("/boom"))
+    c.flush
+    assert_includes JSON.parse(body.join)["debug"]["recovery"], "Retry with a smaller page."
   end
 
   # CACHE-001, CACHE-003.

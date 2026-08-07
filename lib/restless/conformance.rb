@@ -3,6 +3,7 @@
 require_relative "mask"
 require_relative "redact"
 require_relative "fingerprint"
+require_relative "stack_frames"
 require_relative "har"
 require_relative "request_id"
 require_relative "injection"
@@ -95,13 +96,20 @@ module Restless
               "unsupported stack dialect: v8 (this SDK parses Ruby backtraces; FP-044/FP-046)"
       end
 
+      # Parse the stack the way the Rack adapter does. This used to pass
+      # nil, which made the driver structurally incapable of reaching the
+      # stack strategy: the whole path was dead through the harness while
+      # the SDK's own tests, which call StackFrames directly, still passed.
+      # Nothing caught it, because every v8-shaped stack vector is skipped
+      # under FP-046 so the harness never exercises this branch. A driver
+      # that short-circuits the SDK is testing itself.
       result = Fingerprint.compute(
         status: int(input["status"]),
         method: str_or_nil(input["method"]),
         route: str_or_nil(input["route"]),
         response_headers: input["responseHeaders"].is_a?(Hash) ? input["responseHeaders"] : nil,
         response_body: input["responseBody"],
-        stack_frame: nil
+        stack_frame: stack.empty? ? nil : StackFrames.top_user_frame(stack.split("\n"))
       )
       # FP-003: `reason` is human-facing prose, explicitly not contract
       # surface, so drivers must not emit it.

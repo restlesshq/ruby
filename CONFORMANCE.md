@@ -39,7 +39,10 @@ The 8 skips are cases outside this implementation's dialect, not gaps:
 
 - 7 `fp/stack-*` cases feed a v8-shaped stack into `fingerprint`. FP-044
   makes frame parsing per-language and FP-046 requires the driver to say so
-  rather than guess. Covered natively in `test/test_stack_frames.rb`.
+  rather than guess. Covered natively in `test/test_stack_frames.rb`. This
+  includes `fp/stack-not-used-for-4xx`, where the stack is never consulted:
+  the driver declares the dialect on the INPUT rather than on whether the
+  strategy happens to fire, which is what the Python and Go drivers do too.
 - 1 `redactBody/lone-surrogate` case. See the exemption below.
 
 ## Ruby-specific decisions
@@ -65,7 +68,7 @@ the reference. They are the reason this SDK is byte-compatible.
 | REDACT-029 | `bytes.pack("C*").force_encoding("UTF-8").scrub` is byte-identical to Node's `Buffer#toString("utf8")`, including the maximal-subpart replacement rule. Verified differentially. |
 | FP-020 step 9 | `split(/ /, -1)`, never `split(" ")`. A literal single-space argument triggers Ruby's awk-mode split, which collapses runs and drops leading empties. |
 | FP-030 | Hex classes written as `[0-9a-fA-F]` with no `i` flag. Ruby's case-insensitive matching is Unicode case folding, a wider relation than the ASCII-only canonicalization a non-`u` JavaScript regex performs. |
-| FP-042 | `project_relative` is hand-rolled rather than a regex, because the reference pattern ends in `.+$` and the two engines disagree on which characters `.` excludes. |
+| FP-042 | `project_relative` splits on `/` and scans BACKWARDS from the second-to-last segment, so the LAST project dir wins and a deployment root named `/app` (Docker `WORKDIR`, Heroku) cannot survive into the key. `split("/", -1)`: without the negative limit Ruby drops the trailing empty field, so `/proj/src/` would miss `src` here and match it in JavaScript. |
 | FP-043 | Ruby's `Exception#backtrace` is innermost-FIRST, like v8 and Go and unlike a Python traceback, so the walk goes forwards. Verified empirically in `test/test_stack_frames.rb` rather than assumed. |
 | FP-044 | Frames are `path:line:in \`method'` (`'method'` from Ruby 3.4); both quote styles parse. `block (N levels) in foo` is normalized to `block in foo`, since the nesting count behaves like a line number. Skips are matched by FILE PATH: the SDK's own directory (resolved from `__dir__`), `RbConfig`'s stdlib dirs, `Gem.path`, any `/gems/` segment, and `<internal:` frames. Never by module or class name - a name check would also skip a customer's own Restless-flavoured code and would fail to skip this gem when vendored under another constant. |
 | INJECT-005 | `Text.ws_trim`, not `String#strip`. Ruby's strip removes NUL and leaves NBSP; the contract wants exactly the PRIM-002 set. |
@@ -96,16 +99,6 @@ first would produce a `JSON::ParserError` that looks like a conformance
 failure. `test/test_vectors.rb` does the same, swapping each such escape for
 an ASCII marker so the vector documents can be read at all, then skipping the
 cases that contained one.
-
-## Known deviation from intent
-
-`Fingerprint.project_relative` reproduces a defect in the reference (see the
-Known defect note under FP-042): a deployment root named `/app` - Docker
-`WORKDIR /app`, Heroku - survives into the fingerprint key, so production and
-laptop fingerprints differ for the same file. This SDK matches the reference
-deliberately;
-`test/test_stack_frames.rb#test_project_relative_reproduces_the_reference_defect`
-fails loudly the moment the reference is fixed, and says what to do about it.
 
 ## Residual differences, accepted
 

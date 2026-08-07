@@ -25,6 +25,19 @@ module Restless
     # split a group.
     BLOCK_LEVELS_RE = /\Ablock \(\d+ levels\) in /.freeze
 
+    # Ruby 3.4 changed backtrace method labels to carry the receiver:
+    # `detonate` became `Exploder.detonate`, and `run` became `Exploder#run`.
+    # Stripping it back off is not cosmetic. Without it the SAME crash in the
+    # SAME file fingerprints differently depending on which Ruby the service
+    # happens to run, so a routine runtime upgrade silently splits every
+    # existing 5xx group and orphans the Agent Recovery guidance attached to
+    # it. FP-041 forbids exactly that churn for line numbers; a runtime
+    # version is no different.
+    #
+    # Stripping rather than keeping, because that reproduces the label Ruby
+    # 3.3 and earlier already emit, so no stored key moves.
+    RECEIVER_RE = /\A(?:[A-Z]\w*(?:::[A-Z]\w*)*)[.#]/.freeze
+
     # FP-044. The Ruby equivalent of `node_modules` / `node:internal` /
     # `@restlessai/sdk`.
     #
@@ -95,8 +108,19 @@ module Restless
 
     def normalize_fn(name)
       cleaned = name.sub(BLOCK_LEVELS_RE, "block in ")
+        cleaned = strip_receiver(cleaned)
       cleaned.empty? ? "anonymous" : cleaned
     end
+
+      # Applied after the block normalization, and to the method portion of a
+      # `block in X` label as well as a bare one, since 3.4 qualifies both.
+      def strip_receiver(name)
+        if name.start_with?("block in ")
+          "block in " + name.sub(/\Ablock in /, "").sub(RECEIVER_RE, "")
+        else
+          name.sub(RECEIVER_RE, "")
+        end
+      end
 
     def skip_path?(path)
       return true if path.nil? || path.empty?

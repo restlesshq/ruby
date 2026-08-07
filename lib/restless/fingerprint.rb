@@ -246,39 +246,42 @@ module Restless
         SEG_LONG_HEX.match?(segment)
     end
 
-    # FP-042. Strip the absolute path prefix down to a project-relative path,
-    # so the same source file produces the same key on a laptop and in
+    # FP-042. Strip the machine-specific path prefix down to a project-relative
+    # path, so the same source file produces the same key on a laptop and in
     # production.
     #
-    # Hand-rolled rather than regex because the reference is
-    # `/\/(?:src|lib|app|api|routes|controllers|handlers)\/.+$/` and JavaScript's
-    # `.` excludes CR, LS and PS as well as LF while Ruby's excludes only LF.
-    # A path containing a stray CR would therefore take a different branch.
-    # The semantics are: the FIRST `/marker/` whose remainder is non-empty and
-    # free of JavaScript line terminators.
+    # The LAST project directory wins, not the first, and the difference is the
+    # whole point:
     #
-    # KNOWN DEFECT, reproduced deliberately. Because the first match wins, a
-    # deployment root that is itself named after a marker (Docker
-    # `WORKDIR /app`, Heroku) survives into the key, so production and laptop
-    # fingerprints diverge for the same file. See the note under FP-042; the
-    # fix is a CHANGE-003 coordinated change and is NOT in spec 1.0.0.
+    #   /Users/dev/proj/src/db/users.rb     -> src/db/users.rb
+    #   /app/src/db/users.rb                -> src/db/users.rb
+    #   /opt/render/project/src/db/users.rb -> src/db/users.rb
+    #
+    # A first-match rule returns `app/src/db/users.rb` for the middle one,
+    # because the deployment root IS the first match. Docker's conventional
+    # `WORKDIR /app` and Heroku both root there, so first-match made production
+    # disagree with a laptop for the same file across the most common
+    # containerized layout there is, defeating the only thing this function
+    # exists to do.
+    #
+    # The trade is that a nested layout (`/proj/src/a/src/x.rb`) collapses to
+    # `src/x.rb` rather than `src/a/src/x.rb`. That is far rarer than an `/app`
+    # root and is still machine-independent, which is the property being
+    # protected.
     def project_relative(file)
-      pos = 0
-      while (idx = file.index("/", pos))
-        PROJECT_DIRS.each do |marker|
-          next unless file[idx + 1, marker.length] == marker
-          next unless file[idx + 1 + marker.length] == "/"
-
-          rest = file[(idx + 2 + marker.length)..-1]
-          next if rest.nil? || rest.empty?
-          next if rest.each_char.any? { |c| Text.js_line_terminator?(c) }
-
-          return file[(idx + 1)..-1]
-        end
-        pos = idx + 1
+      # `split("/", -1)`: Ruby drops trailing empty fields without the negative
+      # limit, so `/proj/src/` would come back as ["", "proj", "src"] and take
+      # the fallback branch where JavaScript, which keeps the empty field,
+      # matches `src` and returns "src/".
+      segments = file.split("/", -1)
+      # Stop before the final component: a project dir has to have something
+      # after it to be a directory at all. A negative start makes `downto`
+      # yield nothing, which is correct for a bare filename.
+      (segments.length - 2).downto(0) do |i|
+        return segments[i..-1].join("/") if PROJECT_DIRS.include?(segments[i])
       end
 
-      file.split("/", -1).last(2).join("/")
+      segments.last(2).join("/")
     end
   end
 end

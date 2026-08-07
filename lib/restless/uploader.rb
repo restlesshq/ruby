@@ -247,8 +247,11 @@ module Restless
       seen = {}
       out = []
       batch.each do |captured|
-        key = captured["errorFingerprint"] && captured["errorFingerprint"]["key"]
-        next if key.nil? || key.empty? || seen[key]
+        fingerprint = captured["errorFingerprint"]
+        next unless fingerprint.is_a?(Hash)
+
+        key = fingerprint["key"]
+        next if !key.is_a?(String) || key.empty? || seen[key]
 
         seen[key] = true
         out << key
