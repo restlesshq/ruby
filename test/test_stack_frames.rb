@@ -169,32 +169,4 @@ class TestStackFrames < Minitest::Test
     # empty field, the scan misses `src`, and this returns "proj/src".
     assert_equal "src/", Restless::Fingerprint.project_relative("/home/proj/src/")
   end
-
-  # FP-047. The stack strategy displaces whatever the lower rungs would have
-  # produced, so it reports the key it displaced. Nothing else sets one.
-  def test_stack_strategy_reports_the_key_it_displaced
-    frame = { file: "src/db/users.rb", fn: "find" }
-
-    with_message = Restless::Fingerprint.compute(
-      status: 500, method: "POST", route: "/pets",
-      response_body: { "message" => "Something came apart" }, stack_frame: frame
-    )
-    assert_equal "500:src/db/users.rb:find", with_message.key
-    assert_equal "500:POST:/pets:something-came-apart", with_message.previous_key
-
-    # No extractable message, so the route-only rung is what was displaced.
-    without_message = Restless::Fingerprint.compute(
-      status: 500, method: "POST", route: "/pets", stack_frame: frame
-    )
-    assert_equal "500:POST:/pets", without_message.previous_key
-
-    # Nothing displaced, nothing to report.
-    no_stack = Restless::Fingerprint.compute(
-      status: 500, method: "POST", route: "/pets",
-      response_body: { "message" => "Something came apart" }
-    )
-    assert_equal "message", no_stack.strategy
-    assert_nil no_stack.previous_key
-    assert_nil Restless::Fingerprint.compute(status: 404, route: "/pets/{id}").previous_key
-  end
 end

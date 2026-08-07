@@ -250,11 +250,7 @@ module Restless
           captured["errorFingerprint"] = CaptureEngine.wire_fingerprint(fingerprint)
           # INJECT-010: computed once and reused for both the recovery lookup
           # and the upload payload.
-          #
-          # FP-047: the fingerprint-aware lookup, not the key-only one, so a
-          # message still attached to the pre-stack-strategy key keeps being
-          # injected while the group migrates.
-          recovery = @engine.lookup_recovery_for(fingerprint)
+          recovery = @engine.lookup_recovery(fingerprint.key)
         end
 
         injection = safely(nil) do

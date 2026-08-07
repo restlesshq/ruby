@@ -58,16 +58,7 @@ module Restless
         Fingerprint.normalize_route(str_or_nil(input["route"]))
       when "normalizeMessage"
         Fingerprint.normalize_message(str(input["message"]))
-      when "fallbackKey"
-          # FP-047's derivation, dialect-free: every case reaching it through
-          # `fingerprint` carries a v8 stack this SDK must skip (FP-046).
-          Fingerprint.fallback_key(
-            int(input["status"]),
-            str_or_nil(input["method"]) || "GET",
-            str_or_nil(input["route"]),
-            input["responseBody"]
-          )
-        when "projectRelative"
+      when "projectRelative"
         # FP-042 is shared across every SDK even though frame PARSING is not
         # (FP-044/FP-046), so path normalization gets its own dialect-free op.
         Fingerprint.project_relative(str(input["file"]))
@@ -121,11 +112,8 @@ module Restless
         stack_frame: stack.empty? ? nil : StackFrames.top_user_frame(stack.split("\n"))
       )
       # FP-003: `reason` is human-facing prose, explicitly not contract
-      # surface, so drivers must not emit it. FP-047's `previousKey` IS
-      # contract surface, and is emitted only when the stack strategy set one.
-      out = { "strategy" => result.strategy, "key" => result.key }
-      out["previousKey"] = result.previous_key if result.previous_key
-      out
+      # surface, so drivers must not emit it.
+      { "strategy" => result.strategy, "key" => result.key }
     end
 
     def stack_text(raw)

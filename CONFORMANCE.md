@@ -31,13 +31,13 @@ node ../node-sdk/spec/harness/fuzz.mjs \
   --iterations 8000 --seed 24301
 ```
 
-Current status: **208 vectors, 199 passed, 0 failed, 9 skipped.** Zero
+Current status: **206 vectors, 198 passed, 0 failed, 8 skipped.** Zero
 divergence across 34,918 fuzz comparisons on five seeds (24301, 1, 4242,
 99991, 777).
 
-The 9 skips are cases outside this implementation's dialect, not gaps:
+The 8 skips are cases outside this implementation's dialect, not gaps:
 
-- 8 `fp/stack-*` cases feed a v8-shaped stack into `fingerprint`. FP-044
+- 7 `fp/stack-*` cases feed a v8-shaped stack into `fingerprint`. FP-044
   makes frame parsing per-language and FP-046 requires the driver to say so
   rather than guess. Covered natively in `test/test_stack_frames.rb`. This
   includes `fp/stack-not-used-for-4xx`, where the stack is never consulted:
@@ -69,7 +69,6 @@ the reference. They are the reason this SDK is byte-compatible.
 | FP-020 step 9 | `split(/ /, -1)`, never `split(" ")`. A literal single-space argument triggers Ruby's awk-mode split, which collapses runs and drops leading empties. |
 | FP-030 | Hex classes written as `[0-9a-fA-F]` with no `i` flag. Ruby's case-insensitive matching is Unicode case folding, a wider relation than the ASCII-only canonicalization a non-`u` JavaScript regex performs. |
 | FP-042 | `project_relative` splits on `/` and scans BACKWARDS from the second-to-last segment, so the LAST project dir wins and a deployment root named `/app` (Docker `WORKDIR`, Heroku) cannot survive into the key. `split("/", -1)`: without the negative limit Ruby drops the trailing empty field, so `/proj/src/` would miss `src` here and match it in JavaScript. |
-| FP-047 | `Fingerprint::Result` carries `previous_key`, serialized as `previousKey` and omitted when nil. Set only by the stack strategy, from the shared `fallback_key` helper rather than a second copy of the ladder. `Uploader#distinct_fingerprints` sends both keys; `CaptureEngine#lookup_recovery_for` prefers the current one and falls back, and the Rack middleware calls it instead of the key-only `lookup_recovery`. |
 | FP-043 | Ruby's `Exception#backtrace` is innermost-FIRST, like v8 and Go and unlike a Python traceback, so the walk goes forwards. Verified empirically in `test/test_stack_frames.rb` rather than assumed. |
 | FP-044 | Frames are `path:line:in \`method'` (`'method'` from Ruby 3.4); both quote styles parse. `block (N levels) in foo` is normalized to `block in foo`, since the nesting count behaves like a line number. Skips are matched by FILE PATH: the SDK's own directory (resolved from `__dir__`), `RbConfig`'s stdlib dirs, `Gem.path`, any `/gems/` segment, and `<internal:` frames. Never by module or class name - a name check would also skip a customer's own Restless-flavoured code and would fail to skip this gem when vendored under another constant. |
 | INJECT-005 | `Text.ws_trim`, not `String#strip`. Ruby's strip removes NUL and leaves NBSP; the contract wants exactly the PRIM-002 set. |

@@ -67,9 +67,7 @@ module Restless
     # coincide and the result is still well-formed UTF-8.
     RE_DIGIT_WORD = Regexp.new("\\b[#{WORD}\\-]*[0-9][#{WORD}\\-]*\\b").freeze
 
-    # `previous_key` is FP-047 and is set ONLY by the stack strategy. It goes
-    # on the wire as `previousKey` and is omitted when nil.
-    Result = Struct.new(:strategy, :key, :reason, :previous_key)
+    Result = Struct.new(:strategy, :key, :reason)
 
     module_function
 
@@ -125,11 +123,7 @@ module Restless
       if status >= 500 && stack_frame
         return Result.new(
           "stack", "#{status}:#{stack_frame[:file]}:#{stack_frame[:fn]}",
-          "top user frame: #{stack_frame[:fn]} in #{stack_frame[:file]}",
-          # FP-047. What this error keyed on before the stack strategy became
-          # reachable, so a recovery message already attached to that key
-          # survives the move.
-          fallback_key(status, method, route, response_body)
+          "top user frame: #{stack_frame[:fn]} in #{stack_frame[:file]}"
         )
       end
 
@@ -144,20 +138,6 @@ module Restless
       # 5. Status + route only. Coarse, but it groups all unhandled responses.
       Result.new("route-only", "#{status}:#{method}:#{normalized_route}",
                  "no usable code or message; falling back to status + route")
-    end
-
-    # FP-047. The key rungs 4 and 5 of the ladder would produce.
-    #
-    # Factored out rather than duplicated so the stack strategy can report what
-    # it DISPLACED without re-running the ladder: turning that strategy on
-    # moves the key for every uncaught 5xx, and a moved key silently orphans
-    # the Agent Recovery message a customer attached to the old one.
-    def fallback_key(status, method, route, response_body)
-      normalized_route = normalize_route(route)
-      msg = normalize_message(extract_message(response_body))
-      return "#{status}:#{method}:#{normalized_route}" if msg.empty?
-
-      "#{status}:#{method}:#{normalized_route}:#{msg}"
     end
 
     # FP-017. The header name is matched case-insensitively.

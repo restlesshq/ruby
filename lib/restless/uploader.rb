@@ -243,10 +243,6 @@ module Restless
     end
 
     # CACHE-012 feeds off this: every distinct fingerprint key in the batch.
-    #
-    # FP-047: BOTH keys, so the ingest can answer a recovery lookup for either.
-    # A project whose recovery message is still attached to the
-    # pre-stack-strategy key keeps receiving it until the group migrates.
     def distinct_fingerprints(batch)
       seen = {}
       out = []
@@ -254,12 +250,11 @@ module Restless
         fingerprint = captured["errorFingerprint"]
         next unless fingerprint.is_a?(Hash)
 
-        [fingerprint["key"], fingerprint["previousKey"]].each do |key|
-          next if !key.is_a?(String) || key.empty? || seen[key]
+        key = fingerprint["key"]
+        next if !key.is_a?(String) || key.empty? || seen[key]
 
-          seen[key] = true
-          out << key
-        end
+        seen[key] = true
+        out << key
       end
       out
     end

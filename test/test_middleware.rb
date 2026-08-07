@@ -86,12 +86,9 @@ class TestMiddleware < Minitest::Test
     previous.each { |k, v| v.nil? ? ENV.delete(k) : ENV[k] = v }
   end
 
-  # FP-047 fixtures. `Exploder` lives under a `src/` directory, so FP-042
-  # rewrites its path to `src/exploder.rb` on any machine.
+  # `Exploder` lives under a `src/` directory, so FP-042 rewrites its path to
+  # `src/exploder.rb` on any machine.
   STACK_KEY = "500:src/exploder.rb:detonate"
-  # What the ladder produces without the stack strategy: the `message` rung,
-  # against the normalized route and the normalized response message.
-  STACK_PREVIOUS_KEY = "500:GET:/boom:the-widget-frobnicator-is-on-fire"
 
   # A 500 the framework caught itself. It leaves the exception in the Rack env,
   # which is the only way to reach the `stack` strategy for a handled error,
@@ -331,16 +328,15 @@ class TestMiddleware < Minitest::Test
     assert headers["x-log-url"].start_with?("http://docs.test/logs/")
   end
 
-  # FP-047. Turning the `stack` strategy on MOVES the key for every uncaught
-  # 5xx, which would silently orphan whatever Agent Recovery message the
-  # customer had already attached to the old one. The fingerprint therefore
-  # carries the displaced key, the uploader sends BOTH so the ingest can answer
-  # for either, and the lookup falls back to it.
+  # FP-010/FP-040 through the middleware, and the recovery round trip on top
+  # of it.
   #
-  # This is the whole transition in one test: the message is attached ONLY to
-  # the pre-stack-strategy key and must still be injected.
-  def test_a_recovery_message_on_the_previous_key_is_still_injected
-    recorder = Recorder.new("recoveryMessages" => { STACK_PREVIOUS_KEY => "Retry with a smaller page." })
+  # A framework that catches the exception itself is the only way to reach the
+  # `stack` strategy with the injection path still running (an uncaught raise
+  # skips injection and re-raises), so this is the only coverage of
+  # EXCEPTION_ENV_KEYS.
+  def test_a_handled_500_keys_on_the_throw_site_and_injects_its_recovery
+    recorder = Recorder.new("recoveryMessages" => { STACK_KEY => "Retry with a smaller page." })
     c = client(recorder)
     c.setup { |_req| {} }
     mw = c.rack.new(handled_500_app)
@@ -349,39 +345,17 @@ class TestMiddleware < Minitest::Test
     c.flush
 
     fingerprint = recorder.entries.first["errorFingerprint"]
+    # The response body carries a message, so rung 4 had something to key on.
+    # The stack rung outranks it, which is the point: prose keys split when a
+    # message is reworded and collide when two unrelated bugs read alike.
     assert_equal "stack", fingerprint["strategy"]
     assert_equal STACK_KEY, fingerprint["key"]
-    # The displaced key rides along on the wire so the ingest can answer for it.
-    assert_equal STACK_PREVIOUS_KEY, fingerprint["previousKey"]
 
-    # Second occurrence: the current key is a confirmed miss, so the lookup
-    # falls back. Reaching the cache at all also proves the uploader sent the
-    # previous key, since only keys in the batch are cached from a response.
+    # Second occurrence: the key went up with the first batch, so the server's
+    # answer is cached against it and the message is injected without I/O.
     _, _, body = mw.call(env_for("/boom"))
     c.flush
     assert_includes JSON.parse(body.join)["debug"]["recovery"], "Retry with a smaller page."
-  end
-
-  # FP-047. The current key is preferred, so a message attached to the NEW
-  # group wins the moment one exists and the transitional fallback stops
-  # mattering.
-  def test_a_message_on_the_current_key_wins_over_the_previous_key
-    recorder = Recorder.new("recoveryMessages" => {
-                              STACK_KEY => "Current guidance.",
-                              STACK_PREVIOUS_KEY => "Stale guidance."
-                            })
-    c = client(recorder)
-    c.setup { |_req| {} }
-    mw = c.rack.new(handled_500_app)
-
-    mw.call(env_for("/boom"))
-    c.flush
-
-    _, _, body = mw.call(env_for("/boom"))
-    c.flush
-    recovery = JSON.parse(body.join)["debug"]["recovery"]
-    assert_includes recovery, "Current guidance."
-    refute_includes recovery, "Stale guidance."
   end
 
   # CACHE-001, CACHE-003.

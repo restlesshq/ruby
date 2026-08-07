@@ -87,24 +87,6 @@ module Restless
       @recovery_cache.lookup(fingerprint_key)
     end
 
-    # FP-047. Recovery lookup for a whole fingerprint, honouring the
-    # transitional previous key.
-    #
-    # The current key is preferred, so a message attached to the NEW group wins
-    # as soon as one exists, and falls back to the key this error used before
-    # the stack strategy became reachable. Without the fallback, turning that
-    # strategy on would silently stop injecting guidance the customer had
-    # already written, with nothing anywhere to indicate it.
-    def lookup_recovery_for(fingerprint)
-      return nil if fingerprint.nil?
-
-      message = lookup_recovery(fingerprint.key)
-      return message if message
-
-      previous = fingerprint.previous_key
-      previous ? lookup_recovery(previous) : nil
-    end
-
     # FP-002. Errors only; the ingest treats an absent fingerprint as success.
     def compute_fingerprint(captured, stack_frame = nil)
       response = captured["response"] || {}
@@ -134,20 +116,18 @@ module Restless
       nil
     end
 
-    # WIRE-017. The serialized form of a fingerprint. `previousKey` is omitted
-    # rather than sent as null when the stack strategy did not fire (FP-047),
-    # so a fingerprint that displaced nothing looks exactly as it always did.
+    # WIRE-017. The serialized form of a fingerprint.
     #
-    # Shared with the Rack middleware, which computes the fingerprint early
-    # (INJECT-009) and must serialize it identically.
+    # `Fingerprint::Result` is a Struct with symbol members, and the wire wants
+    # string keys, so the mapping has to be written somewhere. It is written
+    # once: the Rack middleware computes the fingerprint early (INJECT-009) and
+    # must serialize it identically to `record` below.
     def self.wire_fingerprint(fingerprint)
-      out = {
+      {
         "strategy" => fingerprint.strategy,
         "key" => fingerprint.key,
         "reason" => fingerprint.reason
       }
-      out["previousKey"] = fingerprint.previous_key if fingerprint.previous_key
-      out
     end
 
     # Run the user's setup callback and resolve owner metadata.
