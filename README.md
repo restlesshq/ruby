@@ -3,7 +3,7 @@
 Capture your API traffic and send it to [Restless](https://restless.ai).
 
 One Rack middleware covers **Rails**, **Sinatra**, **Hanami**, **Grape**,
-**Roda** and anything else that speaks Rack. Ruby 2.7+. No dependencies.
+**Roda** and anything else that speaks Rack. Ruby 2.6+. No dependencies.
 
 ## Install
 

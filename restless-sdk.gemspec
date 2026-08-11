@@ -26,13 +26,12 @@ Gem::Specification.new do |spec|
     "restless_conformance_level" => Restless::CONFORMANCE_LEVEL
   }
 
-  # 2.7 is the floor, matching what CI actually exercises and what README.md
-  # and install.md both promise. The declaration used to say 2.6 - the macOS
-  # system Ruby - which meant the gem installed onto a version nothing tests
-  # and every other statement in the repo excluded. 2.6 has been end-of-life
-  # since 2022; raising the floor removes a support claim rather than a
-  # capability.
-  spec.required_ruby_version = ">= 2.7"
+  # 2.6 is the macOS system Ruby, so it is what a first-time user most likely
+  # already has, and the suite passes on it. The floor is only worth declaring
+  # because CI exercises it - a promise nothing tests is how this line came to
+  # disagree with every other version statement in the repo in the first
+  # place. Keep "2.6" in the CI matrix and this declaration together.
+  spec.required_ruby_version = ">= 2.6"
 
   spec.files = Dir[
     "lib/**/*.rb",
