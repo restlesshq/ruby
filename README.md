@@ -144,5 +144,4 @@ differential fuzzer run against the reference implementation. See
 [CONFORMANCE.md](./CONFORMANCE.md).
 
 ## License
-
-ISC
+MIT

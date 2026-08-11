@@ -17,7 +17,7 @@ Gem::Specification.new do |spec|
     level #{Restless::CONFORMANCE_LEVEL}.
   TEXT
   spec.homepage = "https://restless.ai"
-  spec.license = "ISC"
+  spec.license = "MIT"
 
   spec.metadata = {
     "source_code_uri" => "https://github.com/restlesshq/ruby",
@@ -40,6 +40,9 @@ Gem::Specification.new do |spec|
     "spec/vectors/*.json",
     "README.md",
     "CONFORMANCE.md",
+    # Explicit, because spec.files is an allowlist: unlike npm and setuptools,
+    # rubygems does not pick the licence up on its own.
+    "LICENSE",
     # Ships in the gem, not just the repo. The `api` CLI points installing
     # agents at `bundle show restless-sdk` for the full reference, and a file
     # left out of spec.files leaves that pointer resolving to nothing.
