@@ -26,10 +26,13 @@ Gem::Specification.new do |spec|
     "restless_conformance_level" => Restless::CONFORMANCE_LEVEL
   }
 
-  # 2.7 is the floor for the public gem. Everything is written to also run on
-  # 2.6, which is the system Ruby on macOS and therefore what a first-time
-  # user is most likely to have.
-  spec.required_ruby_version = ">= 2.6"
+  # 2.7 is the floor, matching what CI actually exercises and what README.md
+  # and install.md both promise. The declaration used to say 2.6 - the macOS
+  # system Ruby - which meant the gem installed onto a version nothing tests
+  # and every other statement in the repo excluded. 2.6 has been end-of-life
+  # since 2022; raising the floor removes a support claim rather than a
+  # capability.
+  spec.required_ruby_version = ">= 2.7"
 
   spec.files = Dir[
     "lib/**/*.rb",
@@ -37,7 +40,11 @@ Gem::Specification.new do |spec|
     "spec/VECTORS_VERSION",
     "spec/vectors/*.json",
     "README.md",
-    "CONFORMANCE.md"
+    "CONFORMANCE.md",
+    # Ships in the gem, not just the repo. The `api` CLI points installing
+    # agents at `bundle show restless-sdk` for the full reference, and a file
+    # left out of spec.files leaves that pointer resolving to nothing.
+    "install.md"
   ]
   spec.require_paths = ["lib"]
   # exe/restless-conformance is a dev-only harness, deliberately NOT declared
