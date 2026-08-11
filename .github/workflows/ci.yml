@@ -17,10 +17,20 @@ jobs:
   test:
     name: test (ruby ${{ matrix.ruby-version }})
     runs-on: ubuntu-latest
+    # `head` is advisory: it builds Ruby from master, so it can break for
+    # reasons that are nobody's fault here, and a red X on every unrelated PR
+    # would train people to ignore the whole matrix. It earns its place anyway
+    # - a stricter JSON parser in a newer Ruby broke the vector loader, and
+    # nothing caught it until someone happened to install that Ruby locally.
+    # This is the job that would have said so first.
+    continue-on-error: ${{ matrix.ruby-version == 'head' }}
     strategy:
       fail-fast: false
       matrix:
-        ruby-version: ["2.6", "2.7", "3.0", "3.2", "3.4"]
+        # 2.6 is the declared floor (restless-sdk.gemspec) and must stay in
+        # step with it. Ruby 4.0 is not in the runner toolcache yet, so `head`
+        # is how the next major gets exercised until it is.
+        ruby-version: ["2.6", "2.7", "3.0", "3.2", "3.4", "head"]
     steps:
       - uses: actions/checkout@v4
       - uses: ruby/setup-ruby@v1
