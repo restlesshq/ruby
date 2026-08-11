@@ -10,7 +10,7 @@ The document is ordered so an agent can stop as soon as enough context has been 
 
 `restless-sdk` captures HTTP request/response pairs and ships them in batches to the Restless ingest server for dashboard display.
 
-- **Runtime:** Ruby 2.7+. **No dependencies.**
+- **Runtime:** Ruby 2.6+. **No dependencies.**
 - **Shape:** one Rack middleware. Rails, Sinatra, Hanami, Grape, Roda and anything else that speaks Rack all use the same one; there are no per-framework adapters.
 - **Install name is not the require name:** you install `restless-sdk` and you `require "restless"`.
 

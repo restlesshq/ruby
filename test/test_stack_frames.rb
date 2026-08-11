@@ -124,7 +124,7 @@ class TestStackFrames < Minitest::Test
   end
 
   # Ruby 3.4 changed the frame label quoting from `method' to 'method'. Both
-  # dialects have to parse, because this gem supports 2.7 through current.
+  # dialects have to parse, because this gem supports 2.6 through current.
   #
   # 3.4 made TWO changes to the label, and the quoting is only the visible
   # one. It also began qualifying the method with its receiver. Both halves
