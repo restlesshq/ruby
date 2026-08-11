@@ -37,7 +37,11 @@ Gem::Specification.new do |spec|
     "spec/VECTORS_VERSION",
     "spec/vectors/*.json",
     "README.md",
-    "CONFORMANCE.md"
+    "CONFORMANCE.md",
+    # Ships in the gem, not just the repo. The `api` CLI points installing
+    # agents at `bundle show restless-sdk` for the full reference, and a file
+    # left out of spec.files leaves that pointer resolving to nothing.
+    "install.md"
   ]
   spec.require_paths = ["lib"]
   # exe/restless-conformance is a dev-only harness, deliberately NOT declared
