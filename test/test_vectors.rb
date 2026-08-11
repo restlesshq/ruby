@@ -28,11 +28,38 @@ class TestVectors < Minitest::Test
 
   HEX4 = /\A[0-9a-fA-F]{4}\z/.freeze
 
+  # Is the backslash at `at` itself escaped? `\\u` is an escaped backslash
+  # followed by a literal `u` - six characters of TEXT that the JSON parser
+  # never decodes - whereas `\u` is a unicode escape it does.
+  #
+  # This distinction is the whole bug this method used to have. redact.json
+  # carries both, three lines apart: the lone surrogate under `input.body` is
+  # singly escaped and genuinely unparseable, while the one under `expected`
+  # is doubly escaped because the expected OUTPUT is the literal text
+  # `\ud83d` - that is the contract behaviour being asserted. Rewriting the
+  # second one both corrupted the expectation and emitted `\` followed by the
+  # marker, which is an invalid JSON escape.
+  def self.escaped_backslash?(text, at)
+    run = 0
+    cursor = at - 1
+    while cursor >= 0 && text[cursor] == "\\"
+      run += 1
+      cursor -= 1
+    end
+    run.odd?
+  end
+
   def self.sanitize_lone_surrogates(text)
     out = +""
     index = 0
     while (at = text.index("\\u", index))
       out << text[index...at]
+      if escaped_backslash?(text, at)
+        # Literal `\u` in the decoded string, not an escape. Copy it through.
+        out << text[at, 2]
+        index = at + 2
+        next
+      end
       hex = text[at + 2, 4]
       unless hex && HEX4.match?(hex)
         out << text[at, 2]
