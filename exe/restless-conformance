@@ -1,7 +1,7 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-# The Ruby conformance driver. See node-sdk/spec/driver/PROTOCOL.md.
+# The Ruby conformance driver. See sdk/node/spec/driver/PROTOCOL.md.
 #
 # Dev-only: it is a thin shell over Restless::Conformance, which
 # test/test_vectors.rb also uses, so the vectors cannot describe behaviour the

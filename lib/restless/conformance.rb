@@ -16,7 +16,7 @@ module Restless
   # through this one file, so it is impossible for the vectors to describe
   # behaviour the driver does not exhibit.
   #
-  # See node-sdk/spec/driver/PROTOCOL.md. Internal: never part of the public
+  # See sdk/node/spec/driver/PROTOCOL.md. Internal: never part of the public
   # API, never shipped behaviour a customer depends on.
   module Conformance
     # An input this implementation's language cannot represent or parse. The
