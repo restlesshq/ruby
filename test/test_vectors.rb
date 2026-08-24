@@ -5,7 +5,7 @@
 #
 #     ruby -Ilib -Itest test/test_vectors.rb
 #
-# The cross-language harness (node-sdk/spec/harness/run-vectors.mjs) drives
+# The cross-language harness (sdk/node/spec/harness/run-vectors.mjs) drives
 # exactly the same op table through exe/restless-conformance, so the two
 # cannot disagree. See CONFORMANCE.md.
 
