@@ -242,6 +242,18 @@ module Restless
                        options[:request_id_prefix], options[:has_api_key]
                      ))
 
+      # INJECT-002. The headers ship on every status; only the body work below
+      # is 4xx/5xx, and fingerprinting a success would be wasted.
+      if inject && status.to_i < 400
+        headers.merge!(safely({}) do
+          Injection.headers(
+            request_id: our_id,
+            prefix: options[:request_id_prefix],
+            portal_url: @engine.portal_url
+          )
+        end)
+      end
+
       if inject && status.to_i >= 400
         # INJECT-009: the fingerprint is computed against the customer's RAW
         # response, snapshotted before any injected header or body field.
@@ -257,18 +269,18 @@ module Restless
           Injection.build(
             status: status.to_i,
             request_id: our_id,
-            base_url: options[:base_url],
             prefix: options[:request_id_prefix],
             recovery: recovery,
             method: env["REQUEST_METHOD"],
             path: captured["routePattern"],
-            docs_url: @engine.docs_url
+            portal_url: @engine.portal_url
           )
         end
 
         if injection
           headers.merge!(injection[:headers]) # INJECT-002
-          rewritten = Injection.apply_body(body_text, headers["content-type"],
+          rewritten = injection[:debug] &&
+                      Injection.apply_body(body_text, headers["content-type"],
                                            injection[:debug]) # INJECT-003
           if rewritten && !rewritten.equal?(body_text) && rewritten != body_text
             body = [rewritten]

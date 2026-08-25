@@ -17,7 +17,7 @@ module Restless
   # REDACT-010 requires full Unicode name folding
   # to require full Unicode lowercase. Keep this in step with
   # spec/VECTORS_VERSION.
-  SPEC_VERSION = "1.0.0"
+  SPEC_VERSION = "1.0.1"
 
   # CONTRACT.md 1.1: L1 is the pure functions, L2 adds batching, caches,
   # injection and the safety guarantees.

@@ -31,19 +31,37 @@ module Restless
       flat.empty? ? m : "#{m}-#{flat}"
     end
 
-    # INJECT-001..004, INJECT-006. Returns the headers to set plus the `debug`
-    # object to merge into a JSON body, or nil when nothing should be injected.
-    def build(status:, request_id:, base_url:, prefix: nil, recovery: nil,
-              method: nil, path: nil, docs_url: nil)
-      return nil if status < 400 # INJECT-001
-
+    # INJECT-002. The debug response headers, which ship on every status.
+    #
+    # `x-log-url` is omitted with no portal origin; `x-debug` carries no URL,
+    # so it always ships.
+    def headers(request_id:, prefix: nil, portal_url: nil)
       display = RequestId.format_request_id(request_id, prefix)
-      # INJECT-006: the server-supplied docsUrl when one has been learned,
-      # else the configured base URL. One batch of staleness after a
-      # docs-domain change is accepted.
-      log_host = docs_url.nil? || docs_url.empty? ? base_url : docs_url
-      log_url = "#{log_host}/logs/#{request_id}"
-      debug_cmd = "npx api debug #{display}"
+      out = { "x-debug" => "npx api debug #{display}" }
+      out["x-log-url"] = "#{portal_url}/logs/#{request_id}" unless portal_url.nil? || portal_url.empty?
+      out
+    end
+
+    # INJECT-001..004, INJECT-006. Returns the headers to set plus the `debug`
+    # object to merge into a JSON body (nil when there is nothing to merge).
+    #
+    # `portal_url` is the project's public portal origin, published by the
+    # server. It is NOT the ingest base URL, which serves `/v1/*` and would
+    # 404 both paths, and there is deliberately no fallback to it: with no
+    # portal origin we emit `x-debug` alone. A caller cannot tell a broken URL
+    # from a missing one, and one fetched 404 teaches an agent to stop
+    # following the link.
+    def build(status:, request_id:, prefix: nil, recovery: nil,
+              method: nil, path: nil, portal_url: nil)
+      hdrs = headers(request_id: request_id, prefix: prefix, portal_url: portal_url)
+
+      # INJECT-001. The body object is 4xx/5xx only: a successful body is the
+      # caller's data, not ours to reshape. With no portal origin there is no
+      # URL to put in one either (INJECT-006).
+      return { headers: hdrs, debug: nil } if status < 400 || portal_url.nil? || portal_url.empty?
+
+      log_url = hdrs["x-log-url"]
+      debug_cmd = hdrs["x-debug"]
 
       # Per-request "dig-in" URL the calling agent (often an AI) can fetch for
       # concrete next steps. Deliberately LEGIBLE: it ends in `<slug>.md` so it
@@ -52,7 +70,7 @@ module Restless
       # can correlate the follow-up without any new tracking token.
       slug = recovery_slug(method, path)
       dig_in = "For the accepted parameters and next steps, " \
-               "fetch #{log_host}/p/#{request_id}/#{slug}.md"
+               "fetch #{portal_url}/p/#{request_id}/#{slug}.md"
       # INJECT-004: a cached recovery message precedes the dig-in line,
       # separated by a blank line.
       recovery_text =
@@ -63,10 +81,7 @@ module Restless
         end
 
       {
-        headers: {
-          "x-log-url" => log_url, # INJECT-002
-          "x-debug" => debug_cmd
-        },
+        headers: hdrs,
         debug: {
           "log" => log_url,
           "cli" => debug_cmd,

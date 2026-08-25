@@ -25,7 +25,7 @@ module Restless
       @redact = redact || {}
       @enrich_cache = EnrichCache.new
       @recovery_cache = RecoveryCache.new
-      @docs_url = nil
+      @portal_url = nil
       @docs_mutex = Mutex.new
       @callback = nil
       @uploader = Uploader.new(
@@ -43,8 +43,11 @@ module Restless
 
     # INJECT-006. The latest server-resolved docs origin, or nil when no batch
     # has round-tripped yet.
-    def docs_url
-      @docs_mutex.synchronize { @docs_url }
+    # INJECT-006. The server-published portal origin every injected URL is
+    # built on. Nil before the first upload round-trip, and then nothing is
+    # emitted rather than a guess.
+    def portal_url
+      @docs_mutex.synchronize { @portal_url }
     end
 
     def flush
@@ -61,7 +64,9 @@ module Restless
       docs = body["docsUrl"]
       if docs.is_a?(String) && !docs.empty?
         # Origin only; strip trailing slashes so the server can be lax.
-        @docs_mutex.synchronize { @docs_url = docs.sub(%r{/+\z}, "") }
+        # The wire key stays `docsUrl`: every already-deployed SDK reads it,
+        # so renaming would strand them all with no portal origin (WIRE-023).
+        @docs_mutex.synchronize { @portal_url = docs.sub(%r{/+\z}, "") }
       end
 
       messages = body["recoveryMessages"].is_a?(Hash) ? body["recoveryMessages"] : {}
