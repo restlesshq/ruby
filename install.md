@@ -247,7 +247,8 @@ Bodies are capped at **256 KiB** (UTF-8 bytes) and truncated with `[...TRUNCATED
 
 - Request IDs are v4 UUIDs, never time-based, so they leak no ordering.
 - Every response gets `x-restless-id`. `x-request-id` is set only if the caller did not send one, and an incoming value is never reused as ours.
-- On status **>= 400** the SDK adds `x-log-url` and `x-debug` headers, and merges a `debug` key into a JSON body. There is no user-configurable hook for this.
+- On **every** status the SDK adds `x-log-url` and `x-debug` headers; on status **>= 400** it also merges a `debug` key into a JSON body. There is no user-configurable hook for this.
+- `x-log-url` points at your project's public docs host, which the server tells the SDK on each upload. Until the first upload round-trips it is omitted rather than guessed: a URL that 404s is worse than no URL. The ingest host is never used for it.
 
 ## 10. Blocking
 

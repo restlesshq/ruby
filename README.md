@@ -68,8 +68,8 @@ and body your app produced rather than an inner layer's.
   and friends are redacted before anything leaves your process. Bodies with
   nothing to redact are passed through byte for byte, so your payloads are
   never re-serialized on the way out.
-- **Error triage.** 4xx/5xx responses get `x-log-url` and `x-debug` headers
-  and a `debug` block in the JSON body. If someone attaches a "next steps"
+- **Error triage.** Every response gets `x-log-url` and `x-debug` headers,
+  and 4xx/5xx responses also get a `debug` block in the JSON body. If someone attaches a "next steps"
   message to an error in the dashboard, the SDK injects it as
   `debug.recovery` - read synchronously from an in-process cache, never
   blocking the response on a network call. A 5xx that groups by its throw

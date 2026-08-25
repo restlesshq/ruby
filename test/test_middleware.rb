@@ -272,14 +272,60 @@ class TestMiddleware < Minitest::Test
     # The Sinatra route is normalized to the shape every other SDK reports.
     assert_equal "/pets/{id}", entry["routePattern"]
 
-    # INJECT-002.
-    assert headers["x-log-url"].start_with?("http://localhost:9999/logs/")
+    # INJECT-006. The portal origin is learned from an upload RESPONSE, so
+    # nothing has one yet, and the ingest base URL is never a substitute: it
+    # serves /v1/* and would 404.
+    assert_nil headers["x-log-url"]
     assert headers["x-debug"].start_with?("npx api debug ")
-    # INJECT-004: the dig-in line is always present.
+    # No portal origin means no debug object either, so the body is untouched.
+    refute_includes JSON.parse(body.join), "debug"
+  end
+
+  # INJECT-002/004/008, once the server has published a portal origin.
+  def test_injected_urls_use_the_portal_origin
+    recorder = Recorder.new("docsUrl" => "http://docs.test/")
+    c = client(recorder)
+    c.setup { |_req| {} }
+    mw = c.rack.new(json_app(404, { "code" => "pet_not_found" }, route: "GET /pets/:id"))
+
+    mw.call(env_for("/pets/99")) # cold; this round-trip publishes the origin
+    c.flush
+
+    _, headers, body = mw.call(env_for("/pets/98"))
+    c.flush
+
+    # WIRE-023: trailing slash stripped, so we never build a `//logs/<id>`.
+    assert headers["x-log-url"].start_with?("http://docs.test/logs/")
+    refute_includes headers["x-log-url"], "localhost:9999"
+    assert headers["x-debug"].start_with?("npx api debug ")
+
     parsed = JSON.parse(body.join)
+    # INJECT-004: both URLs share the one origin.
+    assert parsed["debug"]["log"].start_with?("http://docs.test/logs/")
+    assert_includes parsed["debug"]["recovery"], "http://docs.test/p/"
     assert_includes parsed["debug"]["recovery"], "/get-pets-id.md"
     # INJECT-008.
     assert_equal body.join.bytesize.to_s, headers["content-length"]
+  end
+
+  # INJECT-001. An agent that got an unexpected 200 has the same question as
+  # one that got a 500, so the headers ship either way - the body does not.
+  def test_headers_on_a_2xx_without_touching_the_body
+    recorder = Recorder.new("docsUrl" => "http://docs.test")
+    c = client(recorder)
+    c.setup { |_req| {} }
+    mw = c.rack.new(json_app(200, { "ok" => true }))
+
+    mw.call(env_for("/pets")) # cold; publishes the origin
+    c.flush
+
+    _, headers, body = mw.call(env_for("/pets"))
+    c.flush
+
+    assert headers["x-log-url"].start_with?("http://docs.test/logs/")
+    assert headers["x-debug"].start_with?("npx api debug ")
+    # A successful body is the caller's data. Untouched.
+    assert_equal({ "ok" => true }, JSON.parse(body.join))
   end
 
   def test_404_on_no_route_is_endpoint
@@ -314,9 +360,11 @@ class TestMiddleware < Minitest::Test
     c.setup { |_req| {} }
     mw = c.rack.new(json_app(404, { "code" => "pet_not_found" }, route: "GET /pets/:id"))
 
+    # The first call is cold in two ways: no cached recovery message, and no
+    # portal origin yet, so there is no debug object at all (INJECT-006).
     _, _, first = mw.call(env_for("/pets/99"))
     c.flush
-    refute_includes JSON.parse(first.join)["debug"]["recovery"], "Call GET /pets first."
+    refute_includes JSON.parse(first.join), "debug"
 
     _, headers, second = mw.call(env_for("/pets/98"))
     c.flush
@@ -336,7 +384,8 @@ class TestMiddleware < Minitest::Test
   # skips injection and re-raises), so this is the only coverage of
   # EXCEPTION_ENV_KEYS.
   def test_a_handled_500_keys_on_the_throw_site_and_injects_its_recovery
-    recorder = Recorder.new("recoveryMessages" => { STACK_KEY => "Retry with a smaller page." })
+    recorder = Recorder.new("recoveryMessages" => { STACK_KEY => "Retry with a smaller page." },
+                            "docsUrl" => "http://docs.test")
     c = client(recorder)
     c.setup { |_req| {} }
     mw = c.rack.new(handled_500_app)

@@ -79,6 +79,8 @@ module Restless
       # --- injection (section 10) ---
       when "recoverySlug"
         Injection.recovery_slug(str_or_nil(input["method"]), str_or_nil(input["path"]))
+      when "debugInjection"
+        debug_injection(input)
 
       # --- HAR (section 7) ---
       when "harEntry"
@@ -87,6 +89,21 @@ module Restless
       else
         raise UnknownOp, "unknown op: #{op}"
       end
+    end
+
+    # The observable surface only: the headers, and the `debug` object the
+    # adapter would merge (nil when there is nothing to merge).
+    def debug_injection(input)
+      built = Injection.build(
+        status: input["status"].to_i,
+        request_id: str(input["requestId"]),
+        prefix: str_or_nil(input["prefix"]),
+        recovery: str_or_nil(input["recovery"]),
+        method: str_or_nil(input["method"]),
+        path: str_or_nil(input["path"]),
+        portal_url: str_or_nil(input["portalUrl"])
+      )
+      { "headers" => built[:headers], "debug" => built[:debug] }
     end
 
     def fingerprint(input)
