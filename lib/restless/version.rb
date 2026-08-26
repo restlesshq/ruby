@@ -6,7 +6,7 @@ module Restless
   # META-001: the spec version an SDK implements must be recorded in a
   # machine-readable form alongside its conformance level.
 
-  VERSION = "0.1.0"
+  VERSION = "0.1.1"
 
   # WIRE-016: distinct per implementation, so the ingest can attribute a
   # payload to a language.
