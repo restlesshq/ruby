@@ -191,7 +191,7 @@ api_key: CLIENT.mask(request.header("Authorization") || "anonymous")
 
 ## 7. `.restless/settings.json`
 
-Read at startup, walking up from the working directory. Created and owned by the `api` CLI (`npx api setup`). Every Restless SDK reads the same file with the same camelCase keys, so a polyglot repo needs only one.
+Read at startup, walking up from the working directory. Created and owned by the `restless` CLI (`npx restless init`). Every Restless SDK reads the same file with the same camelCase keys, so a polyglot repo needs only one.
 
 ```json
 {
@@ -296,5 +296,5 @@ Batching is fixed: 10 requests per batch, a 5000 ms flush interval, a 1000-entry
 1. `restless-sdk` appears in the `Gemfile`, and `bundle list` finds it.
 2. `CLIENT.rack` is mounted in `config.ru` or `config/application.rb`, as far out as possible.
 3. A `CLIENT.setup` block exists and reads its header via `request.header(...)`.
-4. `.restless/settings.json` exists (created by `npx api setup`).
+4. `.restless/settings.json` exists (created by `npx restless init`).
 5. Starting the server and curling any endpoint returns an `x-restless-id` response header.
