@@ -4,7 +4,7 @@ require "json"
 
 module Restless
   # CONTRACT.md section 12. `.restless/settings.json` is created and owned by
-  # the `api` CLI (`npx api setup`); the SDK consumes exactly two fields of it
+  # the `restless` CLI (`npx restless init`); the SDK consumes exactly two fields of it
   # at runtime (CONFIG-015).
   module Settings
     class ConfigError < StandardError; end
