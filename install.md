@@ -196,12 +196,12 @@ Read at startup, walking up from the working directory. Created and owned by the
 ```json
 {
   "version": 1,
-  "projectId": "<team/workspace uuid>",
   "apis": [
     {
       "id": "<api uuid>",
       "name": "Public API",
       "rootDir": ".",
+      "projectId": "<restless project uuid>",
       "oasFile": ".restless/openapi.yaml",
       "framework": "rails",
       "language": "ruby",
@@ -213,7 +213,7 @@ Read at startup, walking up from the working directory. Created and owned by the
 }
 ```
 
-The SDK reads `requestIdPrefix` and `redact` from the matching entry. Pick one when several are defined:
+The SDK reads `requestIdPrefix` and `redact` from the matching entry. The rest, `projectId` included - which is per-API and never top-level - belongs to the CLI, not the runtime. Pick one when several are defined:
 
 ```ruby
 Restless.new(ENV["RESTLESS_KEY"], api: "Public API")
@@ -246,7 +246,7 @@ Bodies are capped at **256 KiB** (UTF-8 bytes) and truncated with `[...TRUNCATED
 ## 9. Request IDs and response injection
 
 - Request IDs are v4 UUIDs, never time-based, so they leak no ordering.
-- Every response gets `x-restless-id`. `x-request-id` is set only if the caller did not send one, and an incoming value is never reused as ours.
+- The SDK sets exactly one id header, always its own: `x-request-id` by default, or `x-restless-id` when the incoming request already carried an `x-request-id` (we never stomp or reuse an existing chain). With no key resolved the value is the literal `missing-key`.
 - On **every** status the SDK adds `x-log-url` and `x-debug` headers; on status **>= 400** it also merges a `debug` key into a JSON body. There is no user-configurable hook for this.
 - `x-log-url` points at your project's public docs host, which the server tells the SDK on each upload. Until the first upload round-trips it is omitted rather than guessed: a URL that 404s is worse than no URL. The ingest host is never used for it.
 
@@ -297,4 +297,4 @@ Batching is fixed: 10 requests per batch, a 5000 ms flush interval, a 1000-entry
 2. `CLIENT.rack` is mounted in `config.ru` or `config/application.rb`, as far out as possible.
 3. A `CLIENT.setup` block exists and reads its header via `request.header(...)`.
 4. `.restless/settings.json` exists (created by `npx restless init`).
-5. Starting the server and curling any endpoint returns an `x-restless-id` response header.
+5. Starting the server and curling any endpoint returns an `x-request-id` response header carrying a fresh id - `<prefix>-<uuid>` when the API has a `requestIdPrefix` in `.restless/settings.json` (the CLI sets one on every project), otherwise a bare UUID. If your curl sends its own `x-request-id`, look for `x-restless-id` instead. Plenty of stacks set `x-request-id` themselves, so the unambiguous proof it came through our SDK is the `x-debug` header, which rides every captured response. A value of `missing-key` means the server is up but never loaded `RESTLESS_KEY`; restart it.
