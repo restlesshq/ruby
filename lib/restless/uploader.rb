@@ -22,9 +22,13 @@ module Restless
 
     attr_reader :base_url, :request_id_prefix
 
+    # `sampling_hash` is the SAMPLE-040 hash of a non-default sampling config,
+    # stamped on every upload as `x-restless-sampling` (SAMPLE-052). Nil when
+    # sampling is not configured, and then no header is sent at all.
     def initialize(api_key:, base_url:, request_id_prefix: nil, on_response: nil,
-                   transport: nil)
+                   sampling_hash: nil, transport: nil)
       @api_key = api_key.to_s
+      @sampling_hash = sampling_hash
       @base_url = base_url.to_s
       @request_id_prefix = request_id_prefix
       @on_response = on_response
@@ -89,6 +93,27 @@ module Restless
       batch = @mutex.synchronize { take_batch }
       upload(batch) unless batch.nil? || batch.empty?
       join_inflight
+      nil
+    end
+
+    # SAMPLE-050, SAMPLE-051. POST the sampling report on a background
+    # thread, then yield (on that thread) however it went. Same gates as an
+    # upload: nothing under a test runner or without a project key. Never
+    # raises, never retries.
+    def send_sampling_report_async(report, &on_done)
+      thread = Thread.new do
+        begin
+          send_sampling_report(report)
+        ensure
+          begin
+            on_done.call if on_done
+          rescue StandardError => e
+            Env.debug_log("sampling report callback failed: #{e.class}: #{e.message}")
+          end
+        end
+      end
+      thread.abort_on_exception = false
+      track(thread)
       nil
     end
 
@@ -161,10 +186,34 @@ module Restless
     def upload_async(batch)
       thread = Thread.new { upload(batch) }
       thread.abort_on_exception = false
+      track(thread)
+    end
+
+    # `flush` joins these, so it also waits for an in-flight sampling report.
+    def track(thread)
       @mutex.synchronize do
         @inflight.reject! { |t| !t.alive? }
         @inflight << thread
       end
+    end
+
+    def send_sampling_report(report)
+      return if Env.test_run? && !Env.setup_mode?
+      return unless api_key?
+
+      url = "#{@base_url}/v1/sampling"
+      headers = {
+        "Content-Type" => "application/json",
+        "Authorization" => "Bearer #{@api_key}",
+        "X-Restless-Spec-Version" => SPEC_VERSION,
+        "User-Agent" => "#{SDK_NAME}/#{VERSION}"
+      }
+      status, = send_request(url, headers, JSON.generate(report))
+      Env.debug_log("sampling report: #{status.inspect}")
+    rescue StandardError => e
+      # SAFETY-004.
+      Env.debug_log("sampling report error: #{e.class}: #{e.message}")
+      nil
     end
 
     def join_inflight
@@ -194,6 +243,7 @@ module Restless
         "X-Restless-Spec-Version" => SPEC_VERSION,      # META-002
         "User-Agent" => "#{SDK_NAME}/#{VERSION}"
       }
+      headers["x-restless-sampling"] = @sampling_hash if @sampling_hash # SAMPLE-052
 
       # WIRE-004: a JSON ARRAY, even for a single capture.
       status, body = send_request(url, headers, JSON.generate(payload))
@@ -285,6 +335,8 @@ module Restless
       entry["routePattern"] = captured["routePattern"] if captured["routePattern"]
       # WIRE-017: absent for successful responses.
       entry["errorFingerprint"] = captured["errorFingerprint"] if captured["errorFingerprint"]
+      # WIRE-030: present, and true, only on a stub. Never `false`.
+      entry["sampled"] = true if captured["sampled"]
       # WIRE-012: owner id, else the masked end-user key, else "anonymous".
       entry["group"] = {
         "id" => (owner_id && !owner_id.empty? ? owner_id : nil) || masked_key || "anonymous",

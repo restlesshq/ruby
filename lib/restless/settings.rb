@@ -4,8 +4,8 @@ require "json"
 
 module Restless
   # CONTRACT.md section 12. `.restless/settings.json` is created and owned by
-  # the `restless` CLI (`npx restless init`); the SDK consumes exactly two fields of it
-  # at runtime (CONFIG-015).
+  # the `restless` CLI (`npx restless init`); the SDK consumes exactly three fields
+  # of it at runtime (CONFIG-015).
   module Settings
     class ConfigError < StandardError; end
 
@@ -35,7 +35,7 @@ module Restless
       end
 
       # CONFIG-013, CONFIG-014. Returns {id:, name:, request_id_prefix:,
-      # redact:} or nil.
+      # redact:, sampling:} or nil.
       def resolve_api(settings, name = nil)
         return nil if settings.nil?
 
@@ -68,7 +68,10 @@ module Restless
           id: api["id"],
           name: api["name"],
           request_id_prefix: api["requestIdPrefix"],
-          redact: api["redact"].is_a?(Hash) ? api["redact"] : nil
+          redact: api["redact"].is_a?(Hash) ? api["redact"] : nil,
+          # Raw: Sampling.normalize validates it, and warns about a bad one
+          # under DEBUG rather than dropping it silently here.
+          sampling: api["sampling"]
         }
       end
 

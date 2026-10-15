@@ -4,6 +4,7 @@ require_relative "capture"
 require_relative "env"
 require_relative "mask"
 require_relative "request_id"
+require_relative "sampling"
 require_relative "settings"
 require_relative "version"
 
@@ -22,10 +23,25 @@ module Restless
     # them (REDACT-014). Both the settings file and this option are additive
     # on top of the defaults (REDACT-015).
     #
+    # `sampling` sends less for high-traffic endpoints (CONTRACT.md section
+    # 12.1). Each endpoint is "on" (the default), "off", "errors" (only
+    # status >= 400) or a rate in [0, 1]: that fraction of successful
+    # requests in full and the rest without bodies. Errors are never sampled.
+    #
+    #     sampling: {
+    #       default: "on",
+    #       routes: { "GET /health" => "off", "GET /pets" => 0.1, "* /pets/{id}" => "errors" }
+    #     }
+    #
+    # Symbols work too (`default: :off`). Merged with `sampling` in
+    # `.restless/settings.json`, this option winning per route (SAMPLE-014).
+    # An invalid value never raises: it falls back to "on" and says so under
+    # DEBUG=restless.
+    #
     # `transport` is an internal test hook -- anything responding to
     # `call(url, headers, body) -> [status, body]` -- and is not public API.
     def initialize(api_key = nil, base_url: nil, api: nil, redact: nil,
-                   transport: nil)
+                   sampling: nil, transport: nil)
       resolved_key = Env.resolve_api_key(api_key)
 
       # CONFIG-002. Construction still succeeds and capture still runs; only
@@ -41,11 +57,23 @@ module Restless
       entry = Settings.resolve_api(Settings.load, api)
       settings_redact = entry && entry[:redact]
 
+      sampling_config = begin
+        config, warnings = Sampling.normalize(entry && entry[:sampling], sampling)
+        warnings.each { |w| Env.debug_log(w) }
+        config
+      rescue StandardError => e
+        # SAMPLE-003: a bad config never raises. Without one, every request
+        # is sent in full.
+        Env.debug_log("sampling config ignored: #{e.class}: #{e.message}")
+        nil
+      end
+
       @engine = CaptureEngine.new(
         api_key: resolved_key,
         base_url: Env.resolve_base_url(base_url),
         request_id_prefix: entry && entry[:request_id_prefix],
         redact: merge_redact(settings_redact, redact),
+        sampling: sampling_config,
         transport: transport
       )
     end

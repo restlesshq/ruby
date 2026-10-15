@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Spec version** | 1.0.1 |
+| **Spec version** | 1.1.0 |
 | **Level** | L2 (core + batching, caches, injection, safety) |
 | **Reference** | `restlesshq/node` (`@restlessai/sdk`) |
 | **Driver** | `ruby exe/restless-conformance` |
@@ -31,9 +31,9 @@ node ../node/spec/harness/fuzz.mjs \
   --iterations 8000 --seed 24301
 ```
 
-Current status: **206 vectors, 198 passed, 0 failed, 8 skipped.** Zero
-divergence across 34,918 fuzz comparisons on five seeds (24301, 1, 4242,
-99991, 777).
+Current status: **252 vectors, 244 passed, 0 failed, 8 skipped.** Zero
+divergence across 35,926 fuzz comparisons on five seeds (24301, 1, 4242,
+99991, 777), including the four sampling ops.
 
 The 8 skips are cases outside this implementation's dialect, not gaps:
 
@@ -71,6 +71,11 @@ the reference. They are the reason this SDK is byte-compatible.
 | FP-042 | `project_relative` splits on `/` and scans BACKWARDS from the second-to-last segment, so the LAST project dir wins and a deployment root named `/app` (Docker `WORKDIR`, Heroku) cannot survive into the key. `split("/", -1)`: without the negative limit Ruby drops the trailing empty field, so `/proj/src/` would miss `src` here and match it in JavaScript. |
 | FP-043 | Ruby's `Exception#backtrace` is innermost-FIRST, like v8 and Go and unlike a Python traceback, so the walk goes forwards. Verified empirically in `test/test_stack_frames.rb` rather than assumed. |
 | FP-044 | Frames are `path:line:in \`method'` (`'method'` from Ruby 3.4); both quote styles parse. `block (N levels) in foo` is normalized to `block in foo`, since the nesting count behaves like a line number. Skips are matched by FILE PATH: the SDK's own directory (resolved from `__dir__`), `RbConfig`'s stdlib dirs, `Gem.path`, any `/gems/` segment, and `<internal:` frames. Never by module or class name - a name check would also skip a customer's own Restless-flavoured code and would fail to skip this gem when vendored under another constant. |
+| SAMPLE-002 | `(r.to_f * 10000 + 0.5).floor`, never `round`. JSON hands over `1` as an Integer and `0.5` as a Float, so the value goes through `to_f` first; a quantized rate is a Float, which is why a rate of 0 serializes as `0.0` (the same JSON number). `true` is not `Numeric` in Ruby, so it needs no special case to be invalid. |
+| SAMPLE-010 | Keys are trimmed of U+0020 only (`sub(/\A +/, "")`), never `strip`, which would also eat a trailing tab or NUL and turn the invalid key `"GET /x\t"` into a valid one. The method is uppercased with `upcase(:ascii)`. |
+| SAMPLE-032 | The decision is the first thing `finish` does. Rack returns status and headers together before the server writes anything, so unlike Node there is no `writeHead` to intercept: none of the SDK's headers exist yet, even for a streaming body or a hijack. A drop returns the app's response triple untouched, body unread. |
+| SAMPLE-040 | The rate token is `format("0.%04d", k)` from the integer step count. `String#sort` compares bytes, which is the order the contract asks for. |
+| Section 14 | `sampling:` accepts symbol or string keys (`default:`, `"routes"`) and symbol modes (`:off`). Neither can come from the settings file or the driver, so the vectors are unaffected. |
 | INJECT-005 | `Text.ws_trim`, not `String#strip`. Ruby's strip removes NUL and leaves NBSP; the contract wants exactly the PRIM-002 set. |
 | BATCH-003 | The environment indicator is `RESTLESS_ENV`, then `RACK_ENV`, then `RAILS_ENV`. Ruby has three spellings in the wild and no single winner. |
 | BATCH-008 | Test detection keys on those same variables being `test`, plus `RSpec::Core`, `Minitest::Test` and `Test::Unit::TestCase` being defined. |

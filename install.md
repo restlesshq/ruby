@@ -207,13 +207,14 @@ Read at startup, walking up from the working directory. Created and owned by the
       "language": "ruby",
       "baseUrl": "https://api.example.com",
       "requestIdPrefix": "PUB",
-      "redact": { "headers": ["x-company-auth"], "bodyKeys": ["ssh_private_key"] }
+      "redact": { "headers": ["x-company-auth"], "bodyKeys": ["ssh_private_key"] },
+      "sampling": { "default": "on", "routes": { "GET /health": "off", "GET /pets": 0.1 } }
     }
   ]
 }
 ```
 
-The SDK reads `requestIdPrefix` and `redact` from the matching entry. The rest, `projectId` included - which is per-API and never top-level - belongs to the CLI, not the runtime. Pick one when several are defined:
+The SDK reads `requestIdPrefix`, `redact` and `sampling` (§8a, merged with the `sampling:` option, code winning per route) from the matching entry. The rest, `projectId` included - which is per-API and never top-level - belongs to the CLI, not the runtime. Pick one when several are defined:
 
 ```ruby
 Restless.new(ENV["RESTLESS_KEY"], api: "Public API")
@@ -243,11 +244,35 @@ Sentinel format, which the dashboard pattern-matches:
 
 Bodies are capped at **256 KiB** (UTF-8 bytes) and truncated with `[...TRUNCATED: original N bytes]`.
 
+## 8a. Sampling (off by default)
+
+Without a `sampling` block every request is logged in full. With one, each endpoint gets a mode:
+
+| mode | successes (< 400) | errors (>= 400) |
+|---|---|---|
+| `"on"` (default) | full log | full log |
+| a rate `0` to `1` | that fraction in full, the rest without bodies | full log |
+| `"errors"` | nothing sent | full log |
+| `"off"` | nothing sent | nothing sent |
+
+```ruby
+Restless.new(ENV["RESTLESS_KEY"], sampling: {
+  routes: { "GET /health" => "off", "GET /pets" => 0.1, "* /internal/{job}" => "errors" },
+})
+```
+
+Rules an installer should know:
+
+- Keys are `"<METHOD> <route pattern>"`, with `*` for any method. Use the pattern the framework matched (`/pets/{id}` or `/pets/:id`, both work; §4 "Route patterns"), never a concrete URL like `/pets/42`. `HEAD` does not fall back to `GET`. A request with no route pattern uses `default`.
+- Modes are the strings `"on"`, `"off"`, `"errors"` (symbols work in code), or a number from 0 to 1. Anything else falls back to `"on"`; it never raises.
+- Only suggest `"off"` or `"errors"` for endpoints the user agrees are noise (health checks, readiness probes, polling). Never sample auth or payment endpoints without asking.
+- A request that sends nothing also gets no `x-request-id` header, so do not use an `"off"` route to verify the install (§13).
+
 ## 9. Request IDs and response injection
 
 - Request IDs are v4 UUIDs, never time-based, so they leak no ordering.
 - The SDK sets exactly one id header, always its own: `x-request-id` by default, or `x-restless-id` when the incoming request already carried an `x-request-id` (we never stomp or reuse an existing chain). With no key resolved the value is the literal `missing-key`.
-- On **every** status the SDK adds `x-log-url` and `x-debug` headers; on status **>= 400** it also merges a `debug` key into a JSON body. There is no user-configurable hook for this.
+- On **every** status the SDK adds `x-log-url` and `x-debug` headers; on status **>= 400** it also merges a `debug` key into a JSON body. There is no user-configurable hook for this. The one exception is a request that sampling drops (§8a): it gets no id header and nothing injected.
 - `x-log-url` points at your project's public docs host, which the server tells the SDK on each upload. Until the first upload round-trips it is omitted rather than guessed: a URL that 404s is worse than no URL. The ingest host is never used for it.
 
 ## 10. Blocking

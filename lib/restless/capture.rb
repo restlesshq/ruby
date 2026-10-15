@@ -5,6 +5,7 @@ require "json"
 require_relative "caches"
 require_relative "fingerprint"
 require_relative "redact"
+require_relative "sampling"
 require_relative "uploader"
 
 module Restless
@@ -20,9 +21,19 @@ module Restless
 
     attr_reader :uploader, :enrich_cache, :recovery_cache
 
+    # `sampling` is a Sampling::Config, already merged and validated. Nil, or
+    # the default config, means no sampling at all.
     def initialize(api_key:, base_url:, request_id_prefix: nil, redact: nil,
-                   transport: nil)
+                   sampling: nil, transport: nil)
       @redact = redact || {}
+      # Only kept for a non-default config (SAMPLE-041). Without one, `sample`
+      # is a constant :full and nothing about sampling touches the wire.
+      @sampling = sampling && !sampling.default? ? sampling : nil
+      @sampling_hash = @sampling && Sampling.digest(@sampling)
+      @sampling_report = :unsent
+      @sampling_mutex = Mutex.new
+      # Test hook: anything responding to `call` with a Float in [0, 1).
+      @random = -> { Random.rand }
       @enrich_cache = EnrichCache.new
       @recovery_cache = RecoveryCache.new
       @portal_url = nil
@@ -33,8 +44,29 @@ module Restless
         base_url: base_url,
         request_id_prefix: request_id_prefix,
         transport: transport,
+        sampling_hash: @sampling_hash,
         on_response: method(:handle_server_response)
       )
+    end
+
+    attr_writer :random
+
+    # The sampling outcome for one request (CONTRACT.md SAMPLE-030): :full,
+    # :stub or :drop. The middleware calls this exactly once per request, when
+    # the status is final and before any SDK header is added (SAMPLE-032),
+    # and acts on the answer.
+    #
+    # Never raises. Anything unexpected sends the request in full
+    # (SAMPLE-035): sampling may only ever remove data, never break capture.
+    def sample(method, route_pattern, status)
+      return :full if @sampling.nil?
+
+      report_sampling(false)
+      mode = Sampling.resolve_mode(@sampling, method, route_pattern)
+      Sampling.decide(mode, status.to_i, @random.call)
+    rescue StandardError => e
+      Env.debug_log("sampling failed, sending in full: #{e.class}: #{e.message}")
+      :full
     end
 
     def callback=(callback)
@@ -56,6 +88,9 @@ module Restless
 
     # WIRE-020..023, CACHE-006, CACHE-011..013.
     def handle_server_response(body, batch_fingerprints)
+      # WIRE-025, SAMPLE-053.
+      report_sampling(true) if body["needsSamplingConfig"] == true
+
       needs = body["needsEnrichment"]
       if needs.is_a?(Array)
         needs.each { |key| @enrich_cache.invalidate(key) if key.is_a?(String) }
@@ -212,6 +247,13 @@ module Restless
     def record(captured, stack_frame: nil)
       request = captured["request"] || {}
       response = captured["response"] || {}
+      if captured["sampled"]
+        # A stub ships as if no body had been captured (SAMPLE-034). Dropping
+        # them here, before redaction, skips the parse work for exactly the
+        # requests the customer asked to send less of.
+        request = request.merge("body" => nil)
+        response = response.merge("body" => nil)
+      end
       request_headers = request["headers"] || {}
       response_headers = response["headers"] || {}
 
@@ -250,6 +292,40 @@ module Restless
     end
 
     private
+
+    # Tell the ingest which config produced this process's uploads, so an
+    # "off" endpoint does not read as a dead one (SAMPLE-050..053). Once per
+    # process, on the first decision; again only when the server asks, and
+    # never while a report is already in flight.
+    def report_sampling(resend)
+      return if @sampling.nil?
+
+      send_now = @sampling_mutex.synchronize do
+        if @sampling_report == :inflight || (@sampling_report == :sent && !resend)
+          false
+        else
+          @sampling_report = :inflight
+          true
+        end
+      end
+      return unless send_now
+
+      report = {
+        "hash" => @sampling_hash,
+        "default" => @sampling.default,
+        "routes" => Sampling.sorted_routes(@sampling),
+        "creator" => { "name" => SDK_NAME, "version" => VERSION }
+      }
+      # Fire and forget on a background thread, and a failure is not retried
+      # (SAMPLE-051): the `x-restless-sampling` header on the next upload is
+      # how the server asks again if it never got this.
+      @uploader.send_sampling_report_async(report) do
+        @sampling_mutex.synchronize { @sampling_report = :sent }
+      end
+    rescue StandardError => e
+      @sampling_mutex.synchronize { @sampling_report = :sent }
+      Env.debug_log("sampling report failed: #{e.class}: #{e.message}")
+    end
 
     # Accept both `:api_key`/`"apiKey"` spellings so the callback reads
     # naturally in Ruby without losing the documented wire names (SETUP-001).

@@ -210,21 +210,45 @@ module Restless
     def finish(env, setup, our_id, started_at, clock, response,
                request_body:, stack_frame:, inject: true)
       status, headers, body = response
-      headers = normalize_headers(headers)
+      route = route_pattern(env)
 
-      body_text, body = read_response_body(body, headers)
+      # SAMPLE-032. One decision per request, here: Rack hands over the status
+      # and headers together, before the server has written a byte, so the
+      # status is final and none of our headers exist yet. That holds for a
+      # streaming body and for a hijack too.
+      outcome = @engine.sample(env["REQUEST_METHOD"], route, status.to_i)
+
+      # SAMPLE-033. Dropped: no log, so no id header, no injected headers and
+      # no `debug` object pointing at one. The response goes back exactly as
+      # the app returned it, body unread.
+      return response if outcome == :drop
+
+      # SAMPLE-034. A stub never ships a body, and is always a success, so
+      # there is nothing to inject into it either: leave the body unread.
+      stub = outcome == :stub
+
+      headers = normalize_headers(headers)
+      # Rack's partial hijack hands the server a callable in the headers. It
+      # is not a header: keep it out of the capture and give it back intact.
+      hijack = headers.delete("rack.hijack")
+
+      body_text, body = if stub || hijack
+                          [nil, body]
+                        else
+                          read_response_body(body, headers)
+                        end
       duration = ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - clock) * 1000).round
 
       captured = {
         "requestId" => our_id,
         "startedAt" => Text.iso8601_millis(started_at),
         "duration" => duration,
-        "routePattern" => route_pattern(env),
+        "routePattern" => route,
         "request" => {
           "method" => env["REQUEST_METHOD"],
           "url" => Middleware.full_url(env),
           "headers" => request_headers(env),
-          "body" => request_body
+          "body" => stub ? nil : request_body
         },
         "response" => {
           "status" => status.to_i,
@@ -234,6 +258,7 @@ module Restless
         "user" => setup
       }
       captured.delete("routePattern") if captured["routePattern"].nil?
+      captured["sampled"] = true if stub # WIRE-030
 
       options = @engine.uploader.options
       # REQID-010, REQID-011.
@@ -293,6 +318,8 @@ module Restless
 
       safely(nil) { @engine.record(captured, stack_frame: stack_frame) }
 
+      # After `record`, which copies the headers it keeps.
+      headers["rack.hijack"] = hijack if hijack
       [status, headers, body]
     rescue StandardError => e
       Env.debug_log("middleware finish failed: #{e.class}: #{e.message}")
@@ -305,7 +332,14 @@ module Restless
     def normalize_headers(headers)
       out = {}
       (headers || {}).each do |name, value|
-        out[name.to_s.downcase] = value.is_a?(Array) ? value.join(", ") : value.to_s
+        name = name.to_s.downcase
+        out[name] = if name == "rack.hijack"
+                      value # a callable, not a header value
+                    elsif value.is_a?(Array)
+                      value.join(", ")
+                    else
+                      value.to_s
+                    end
       end
       out
     end

@@ -7,6 +7,7 @@ require_relative "stack_frames"
 require_relative "har"
 require_relative "request_id"
 require_relative "injection"
+require_relative "sampling"
 
 module Restless
   # The shared operation table behind the conformance driver.
@@ -86,6 +87,24 @@ module Restless
       when "harEntry"
         Har.to_har_entry(hash(input["captured"]))
 
+      # --- sampling (section 12.1) ---
+      # Routes come back as sorted [key, mode] pairs so the comparison pins
+      # the normalized keys without depending on hash order. Warnings are
+      # debug output, not contract surface, so they are not emitted.
+      when "samplingConfig"
+        config = sampling_config(input)
+        { "default" => config.default, "routes" => config.routes.sort_by { |key, _| key } }
+      when "samplingMode"
+        Sampling.resolve_mode(sampling_config(input), str(input["method"]),
+                              str_or_nil(input["route"]))
+      when "samplingDecide"
+        status = input["status"].is_a?(Numeric) ? input["status"] : 0
+        u = input["u"].is_a?(Numeric) ? input["u"] : 0
+        Sampling.decide(input["mode"], status, u).to_s
+      when "samplingHash"
+        config = sampling_config(input)
+        { "canonical" => Sampling.canonical(config), "hash" => Sampling.digest(config) }
+
       else
         raise UnknownOp, "unknown op: #{op}"
       end
@@ -104,6 +123,12 @@ module Restless
         portal_url: str_or_nil(input["portalUrl"])
       )
       { "headers" => built[:headers], "debug" => built[:debug] }
+    end
+
+    # `settings` and `code` are passed verbatim, possibly invalid, and every
+    # op that takes them merges and normalizes them first (SAMPLE-014).
+    def sampling_config(input)
+      Sampling.normalize(input["settings"], input["code"]).first
     end
 
     def fingerprint(input)
