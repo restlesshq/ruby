@@ -445,6 +445,20 @@ class TestSampling < Minitest::Test
     assert_equal({ "GET /a" => "off" }, config.routes)
   end
 
+  # SAMPLE-012: one bad key is ignored on its own. A key with invalid UTF-8
+  # bytes must not discard the rest of the config.
+  def test_a_key_with_invalid_bytes_is_ignored_alone
+    bad = "GET /bad\xff".dup.force_encoding(Encoding::UTF_8)
+    config, warnings = Restless::Sampling.normalize(nil, routes: { "GET /ok" => "off", bad => "off" })
+    assert_equal({ "GET /ok" => "off" }, config.routes)
+    assert_equal 1, warnings.length
+
+    # SAMPLE-021: a route pattern that is not valid gets the default.
+    off = Restless::Sampling::Config.new("off", {})
+    assert_equal "off", Restless::Sampling.resolve_mode(off, "GET", "/bad\xff".dup.force_encoding(Encoding::UTF_8))
+    assert_equal "off", Restless::Sampling.resolve_mode(off, "GET", "/café")
+  end
+
   def test_string_keys_work_in_code_too
     config, = Restless::Sampling.normalize(nil, "default" => 0.1, "routes" => { "* /a" => "on" })
     assert_equal 0.1, config.default

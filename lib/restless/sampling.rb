@@ -66,7 +66,13 @@ module Restless
 
     # SAMPLE-011. The normalized path, or nil when it is not a valid one.
     def normalize_path(path)
-      normalized = path.to_s.gsub(PARAM_RE, '{\1}')
+      path = path.to_s
+      # Normalizing only rewrites ASCII, so a non-ASCII path can never become
+      # valid. Checking first also keeps a string with invalid bytes away
+      # from `gsub`, which would raise on it.
+      return nil unless path.ascii_only?
+
+      normalized = path.gsub(PARAM_RE, '{\1}')
       normalized = normalized[0..-2] while normalized.length > 1 && normalized.end_with?("/")
       PATH_RE.match?(normalized) ? normalized : nil
     end
@@ -74,8 +80,12 @@ module Restless
     # SAMPLE-010. `"get  /pets/:id/"` becomes `"GET /pets/{id}"`. Nil when
     # the key is not valid.
     def normalize_route_key(key)
+      key = key.to_s
+      # As in normalize_path: never valid, and `sub` would raise on bad bytes.
+      return nil unless key.ascii_only?
+
       # Only U+0020 is trimmed: a tab is not a separator (SAMPLE-010).
-      trimmed = key.to_s.sub(/\A +/, "").sub(/ +\z/, "")
+      trimmed = key.sub(/\A +/, "").sub(/ +\z/, "")
       space = trimmed.index(" ")
       return nil if space.nil?
 

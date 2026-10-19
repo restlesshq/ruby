@@ -286,7 +286,7 @@ CLIENT.setup do |request|
 end
 ```
 
-The handler never runs. The response body is JSON `{"error": "<message>"}`. `enrich` is not called for a blocked request.
+The handler never runs. The response body is JSON `{"error": "<message>"}`. `enrich` is not called for a blocked request. Sampling (§8a) treats a blocked request like any other response with its status: a 403 or 429 is logged in full, except on an `"off"` route, where it is not logged and gets no id header.
 
 ## 11. Environment variables and batching
 
