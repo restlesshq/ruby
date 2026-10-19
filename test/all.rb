@@ -7,3 +7,4 @@
 require_relative "test_vectors"
 require_relative "test_stack_frames"
 require_relative "test_middleware"
+require_relative "test_sampling"

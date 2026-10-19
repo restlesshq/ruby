@@ -8,6 +8,7 @@ require_relative "restless/redact"
 require_relative "restless/fingerprint"
 require_relative "restless/stack_frames"
 require_relative "restless/har"
+require_relative "restless/sampling"
 require_relative "restless/request_id"
 require_relative "restless/injection"
 require_relative "restless/caches"
@@ -22,7 +23,7 @@ require_relative "restless/rack"
 
 # Capture your API traffic and send it to Restless.
 #
-# This SDK implements version 1.0.0 of the Restless SDK Contract at level L2.
+# This SDK implements version 1.1.0 of the Restless SDK Contract at level L2.
 # See CONFORMANCE.md.
 #
 #     client = Restless.new(ENV["RESTLESS_KEY"])
