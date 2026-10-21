@@ -266,14 +266,15 @@ Rules an installer should know:
 - Keys are `"<METHOD> <route pattern>"`, with `*` for any method. Use the pattern the framework matched (`/pets/{id}` or `/pets/:id`, both work; §4 "Route patterns"), never a concrete URL like `/pets/42`. `HEAD` does not fall back to `GET`. A request with no route pattern uses `default`.
 - Modes are the strings `"on"`, `"off"`, `"errors"` (symbols work in code), or a number from 0 to 1. Anything else falls back to `"on"`; it never raises.
 - Only suggest `"off"` or `"errors"` for endpoints the user agrees are noise (health checks, readiness probes, polling). Never sample auth or payment endpoints without asking.
-- A request that sends nothing also gets no `x-request-id` header, so do not use an `"off"` route to verify the install (§13).
+- A request that sends nothing also gets no `x-request-id`, `x-debug` or `x-api-feedback` header, so do not use an `"off"` route to verify the install (§13).
 
 ## 9. Request IDs and response injection
 
 - Request IDs are v4 UUIDs, never time-based, so they leak no ordering.
 - The SDK sets exactly one id header, always its own: `x-request-id` by default, or `x-restless-id` when the incoming request already carried an `x-request-id` (we never stomp or reuse an existing chain). With no key resolved the value is the literal `missing-key`.
-- On **every** status the SDK adds `x-log-url` and `x-debug` headers; on status **>= 400** it also merges a `debug` key into a JSON body. There is no user-configurable hook for this. The one exception is a request that sampling drops (§8a): it gets no id header and nothing injected.
-- `x-log-url` points at your project's public docs host, which the server tells the SDK on each upload. Until the first upload round-trips it is omitted rather than guessed: a URL that 404s is worse than no URL. The ingest host is never used for it.
+- On **every** status the SDK adds `x-log-url: <portalOrigin>/logs/<id>`, `x-debug: npx api debug <id>` and `x-api-feedback: npx api feedback <id>` headers; on status **>= 400** it also merges a `debug` key into a JSON body. There is no user-configurable hook for this. The one exception is a request that sampling drops (§8a): it gets no id header and nothing injected.
+- `x-log-url` points at your project's public docs host, which the server tells the SDK on each upload. Until the first upload round-trips it is omitted rather than guessed: a URL that 404s is worse than no URL. The ingest host is never used for it. `x-debug` and `x-api-feedback` carry no URL, so they are present from the very first response.
+- Browser callers only see these headers if the API lists them in `Access-Control-Expose-Headers` (for example `x-log-url, x-debug, x-api-feedback`); same-origin and server-side callers see them without it.
 
 ## 10. Blocking
 

@@ -118,6 +118,15 @@ class TestMiddleware < Minitest::Test
     end
   end
 
+  # INJECT-002. `x-api-feedback` names the same display id as `x-debug`,
+  # which is the id the caller already sees in the id header.
+  def assert_feedback_matches_debug(headers)
+    debug_id = headers["x-debug"].sub("npx api debug ", "")
+    refute_empty debug_id
+    assert_equal "npx api feedback #{debug_id}", headers["x-api-feedback"]
+    assert_equal debug_id, headers["x-restless-id"] || headers["x-request-id"]
+  end
+
   # --- wire payload -------------------------------------------------------
 
   def test_wire_payload_shape
@@ -277,6 +286,8 @@ class TestMiddleware < Minitest::Test
     # serves /v1/* and would 404.
     assert_nil headers["x-log-url"]
     assert headers["x-debug"].start_with?("npx api debug ")
+    # Neither CLI header carries a URL, so both survive.
+    assert_feedback_matches_debug headers
     # No portal origin means no debug object either, so the body is untouched.
     refute_includes JSON.parse(body.join), "debug"
   end
@@ -298,6 +309,7 @@ class TestMiddleware < Minitest::Test
     assert headers["x-log-url"].start_with?("http://docs.test/logs/")
     refute_includes headers["x-log-url"], "localhost:9999"
     assert headers["x-debug"].start_with?("npx api debug ")
+    assert_feedback_matches_debug headers
 
     parsed = JSON.parse(body.join)
     # INJECT-004: both URLs share the one origin.
@@ -324,6 +336,7 @@ class TestMiddleware < Minitest::Test
 
     assert headers["x-log-url"].start_with?("http://docs.test/logs/")
     assert headers["x-debug"].start_with?("npx api debug ")
+    assert_feedback_matches_debug headers
     # A successful body is the caller's data. Untouched.
     assert_equal({ "ok" => true }, JSON.parse(body.join))
   end

@@ -135,6 +135,7 @@ class TestSampling < Minitest::Test
     assert_same response[2], returned[2]
     refute id_header?(returned[1])
     refute returned[1].key?("x-debug")
+    refute returned[1].key?("x-api-feedback")
     assert_equal [], collector.uploads
   end
 
@@ -146,6 +147,8 @@ class TestSampling < Minitest::Test
 
     assert_equal 503, status
     refute id_header?(headers)
+    refute headers.key?("x-debug")
+    refute headers.key?("x-api-feedback")
     # No `debug` object merged into the body (INJECT-001).
     assert_equal({ "error" => "down" }, JSON.parse(text))
     assert_equal [], collector.uploads
@@ -158,6 +161,7 @@ class TestSampling < Minitest::Test
     c.flush
 
     refute id_header?(headers)
+    refute headers.key?("x-api-feedback")
     assert_equal [], collector.uploads
   end
 
@@ -182,6 +186,7 @@ class TestSampling < Minitest::Test
     # The stub is a real log, so the caller can still be pointed at it.
     assert id_header?(headers)
     assert headers.key?("x-debug")
+    assert headers.key?("x-api-feedback")
     assert_equal({ "pets" => [1, 2] }, JSON.parse(text))
     assert_equal 1, collector.uploads.length
     entry = collector.uploads[0]
