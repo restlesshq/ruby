@@ -16,7 +16,9 @@ concurrency:
 jobs:
   test:
     name: test (ruby ${{ matrix.ruby-version }})
-    runs-on: ubuntu-latest
+    # Pinned, not ubuntu-latest: 26.04 ships no Ruby 2.6 to 3.0 builds,
+    # and 2.6 is the declared floor in restless-sdk.gemspec.
+    runs-on: ubuntu-24.04
     # `head` is advisory: it builds Ruby from master, so it can break for
     # reasons that are nobody's fault here, and a red X on every unrelated PR
     # would train people to ignore the whole matrix. It earns its place anyway
