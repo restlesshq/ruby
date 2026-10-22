@@ -33,11 +33,15 @@ module Restless
 
     # INJECT-002. The debug response headers, which ship on every status.
     #
-    # `x-log-url` is omitted with no portal origin; `x-debug` carries no URL,
-    # so it always ships.
+    # `x-log-url` is omitted with no portal origin; `x-debug` and
+    # `x-api-feedback` carry no URL, so they always ship (INJECT-006). Both
+    # CLI commands take the same display id the caller sees in the id header.
     def headers(request_id:, prefix: nil, portal_url: nil)
       display = RequestId.format_request_id(request_id, prefix)
-      out = { "x-debug" => "npx api debug #{display}" }
+      out = {
+        "x-debug" => "npx api debug #{display}",
+        "x-api-feedback" => "npx api feedback #{display}"
+      }
       out["x-log-url"] = "#{portal_url}/logs/#{request_id}" unless portal_url.nil? || portal_url.empty?
       out
     end
@@ -48,8 +52,8 @@ module Restless
     # `portal_url` is the project's public portal origin, published by the
     # server. It is NOT the ingest base URL, which serves `/v1/*` and would
     # 404 both paths, and there is deliberately no fallback to it: with no
-    # portal origin we emit `x-debug` alone. A caller cannot tell a broken URL
-    # from a missing one, and one fetched 404 teaches an agent to stop
+    # portal origin we emit the CLI headers alone. A caller cannot tell a
+    # broken URL from a missing one, and one fetched 404 teaches an agent to stop
     # following the link.
     def build(status:, request_id:, prefix: nil, recovery: nil,
               method: nil, path: nil, portal_url: nil)

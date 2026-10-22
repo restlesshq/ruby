@@ -85,8 +85,12 @@ and body your app produced rather than an inner layer's.
   and friends are redacted before anything leaves your process. Bodies with
   nothing to redact are passed through byte for byte, so your payloads are
   never re-serialized on the way out.
-- **Error triage.** Every response gets `x-log-url` and `x-debug` headers,
-  and 4xx/5xx responses also get a `debug` block in the JSON body. If someone attaches a "next steps"
+- **Error triage.** Every response gets an `x-log-url` header pointing at
+  the captured log, an `x-debug` header with the `npx api debug <id>`
+  command, and an `x-api-feedback` header with the `npx api feedback <id>`
+  command for filing feedback about that exact request. 4xx/5xx responses
+  also get a `debug` block in the JSON body. Browser callers can only read
+  these headers if your API lists them in `Access-Control-Expose-Headers`. If someone attaches a "next steps"
   message to an error in the dashboard, the SDK injects it as
   `debug.recovery` - read synchronously from an in-process cache, never
   blocking the response on a network call. A 5xx that groups by its throw
@@ -199,7 +203,7 @@ re-raised untouched, leaving your own error handling completely unaffected.
 
 ## Conformance
 
-This SDK implements version 1.1.0 of the Restless SDK Contract at level L2,
+This SDK implements version 1.2.0 of the Restless SDK Contract at level L2,
 and is verified against the shared cross-language conformance vectors and a
 differential fuzzer run against the reference implementation. See
 [CONFORMANCE.md](./CONFORMANCE.md).
