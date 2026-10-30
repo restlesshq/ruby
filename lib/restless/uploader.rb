@@ -2,6 +2,8 @@
 
 require "json"
 require "net/http"
+require "time"
+require "timeout"
 require "uri"
 
 require_relative "env"
@@ -9,37 +11,40 @@ require_relative "har"
 require_relative "version"
 
 module Restless
-  # CONTRACT.md sections 8 (wire format) and 9 (batching).
-  #
-  # Never raises to callers. Upload failures go to stderr under the debug flag
-  # and are otherwise swallowed: observability must not break the request path
-  # (SAFETY-004, SAFETY-008).
+  # CONTRACT.md sections 8 (wire format) and 9 (batching). Never raises to
+  # callers; failures surface only under the debug flag (SAFETY-004, SAFETY-008).
   class Uploader
     BATCH_SIZE = 10          # BATCH-001
     FLUSH_INTERVAL_MS = 5000 # BATCH-002
     MAX_QUEUE = 1000         # BATCH-004
-    HTTP_TIMEOUT_S = 10
+    MAX_IN_FLIGHT = 4        # BATCH-009
+    MAX_UPLOAD_ENTRIES = 100 # BATCH-010
+    HTTP_TIMEOUT_S = 10      # WIRE-028
+    MAX_RETRIES = 2          # WIRE-026
+    RETRY_BASE_S = 1.0
+    MAX_RETRY_DELAY_S = 10.0
+
+    # Failures where the request never reached the ingest, so a resend cannot
+    # duplicate (WIRE-026). SocketError is a DNS lookup failure.
+    NOT_SENT_ERRORS = [Errno::ECONNREFUSED, SocketError].freeze
 
     attr_reader :base_url, :request_id_prefix
 
-    # `sampling_hash` is the SAMPLE-040 hash of a non-default sampling config,
-    # stamped on every upload as `x-restless-sampling` (SAMPLE-052). Nil when
-    # sampling is not configured, and then no header is sent at all.
+    # `sampling_hash` is the SAMPLE-040 hash stamped on every upload as
+    # `x-restless-sampling` (SAMPLE-052); nil sends no header at all.
     def initialize(api_key:, base_url:, request_id_prefix: nil, on_response: nil,
-                   sampling_hash: nil, transport: nil)
+                   sampling_hash: nil, transport: nil, sleeper: nil)
       @api_key = api_key.to_s
       @sampling_hash = sampling_hash
       @base_url = base_url.to_s
       @request_id_prefix = request_id_prefix
       @on_response = on_response
-      # Test hook. Anything responding to
-      # `call(url, headers, body) -> [status, body]`.
+      # Test hooks: `transport.call(url, headers, body) -> [status, body, headers]`
+      # and `sleeper.call(seconds)` in place of a real retry wait.
       @transport = transport
+      @sleeper = sleeper
 
-      @queue = []
-      @mutex = Mutex.new
-      @timer = nil
-      @inflight = []
+      reset_state
 
       warn_if_insecure
     end
@@ -66,41 +71,63 @@ module Restless
       # BATCH-008.
       return if Env.test_run? && !Env.setup_mode?
 
-      batch = nil
-      @mutex.synchronize do
+      reset_after_fork
+      batches = @mutex.synchronize do
         if @queue.length >= MAX_QUEUE
-          # Drop the OLDEST. The newest entries are the ones an operator is
-          # actively debugging.
+          # Drop the OLDEST: the newest are what an operator is debugging.
           @queue.shift
           Env.debug_log("queue at #{MAX_QUEUE} -- dropping oldest captured request")
         end
         @queue << captured
 
-        if flush_immediately? || @queue.length >= BATCH_SIZE
-          batch = take_batch
+        if flush_immediately?
+          take_batches(true)
+        elsif @queue.length >= BATCH_SIZE
+          take_batches(false)
         else
           start_timer
+          []
         end
       end
 
-      upload_async(batch) if batch
+      start_workers(batches)
+      nil
+    rescue StandardError => e
+      Env.debug_log("push failed: #{e.class}: #{e.message}")
       nil
     end
 
-    # BATCH-005, BATCH-006, BATCH-007. Synchronous: resolves when the attempt
-    # completes.
+    # BATCH-005 to BATCH-007. Uploads everything queued, at most MAX_IN_FLIGHT
+    # at a time, and returns once all of it has settled, retries included.
     def flush
-      batch = @mutex.synchronize { take_batch }
-      upload(batch) unless batch.nil? || batch.empty?
-      join_inflight
+      reset_after_fork
+      @mutex.synchronize do
+        cancel_timer
+        @draining += 1
+        begin
+          loop do
+            start_workers(take_batches(true))
+            break if @queue.empty? && @active.zero?
+
+            # Timed only as a guard against a worker that vanished without
+            # releasing its slot; every real release broadcasts.
+            @cond.wait(@mutex, 1.0)
+          end
+        ensure
+          @draining -= 1
+        end
+      end
+      join_reports
+      nil
+    rescue StandardError => e
+      Env.debug_log("flush failed: #{e.class}: #{e.message}")
       nil
     end
 
-    # SAMPLE-050, SAMPLE-051. POST the sampling report on a background
-    # thread, then yield (on that thread) however it went. Same gates as an
-    # upload: nothing under a test runner or without a project key. Never
-    # raises, never retries.
+    # SAMPLE-050, SAMPLE-051. POST the sampling report on a background thread,
+    # then yield on that thread. Same gates as an upload; never raises or retries.
     def send_sampling_report_async(report, &on_done)
+      reset_after_fork
       thread = Thread.new do
         begin
           send_sampling_report(report)
@@ -113,7 +140,10 @@ module Restless
         end
       end
       thread.abort_on_exception = false
-      track(thread)
+      @mutex.synchronize do
+        @reports.reject! { |t| !t.alive? }
+        @reports << thread
+      end
       nil
     end
 
@@ -127,9 +157,25 @@ module Restless
 
     private
 
-    # BATCH-003. Flush every push when the app is not in production, or when
-    # the ingest is on localhost. Both keep the customer dev loop and
-    # self-hosted setups low-latency.
+    def reset_state
+      @pid = Process.pid
+      @mutex = Mutex.new
+      @cond = ConditionVariable.new
+      @queue = []
+      @active = 0   # uploads holding a BATCH-009 slot, including retry waits
+      @draining = 0 # flushes in progress, which let partial batches through
+      @timer = nil
+      @reports = []
+    end
+
+    # Puma and Unicorn fork after the app loads: the child inherits this state
+    # but none of its threads, so it starts clean rather than count dead slots.
+    def reset_after_fork
+      reset_state unless @pid == Process.pid
+    end
+
+    # BATCH-003. Outside production, or against a localhost ingest, every push
+    # flushes, keeping the dev loop and self-hosted setups low-latency.
     def flush_immediately?
       return true unless Env.production?
       return true if Env.localhost?(@base_url)
@@ -137,14 +183,66 @@ module Restless
       false
     end
 
-    # Caller holds @mutex.
-    def take_batch
-      cancel_timer
-      return nil if @queue.empty?
+    # Caller holds @mutex. Claims a slot per batch; `partial` lets a batch
+    # under BATCH_SIZE go (BATCH-010).
+    def take_batches(partial)
+      # BATCH-007. No key: drop everything, never retry or accumulate.
+      unless api_key?
+        Env.debug_log("no API key -- dropping batch of #{@queue.length}") unless @queue.empty?
+        @queue.clear
+        cancel_timer
+        return []
+      end
 
-      batch = @queue
-      @queue = []
+      batches = []
+      while @active < MAX_IN_FLIGHT && !@queue.empty? && (partial || @queue.length >= BATCH_SIZE)
+        batches << @queue.shift(MAX_UPLOAD_ENTRIES)
+        @active += 1
+      end
+      cancel_timer if @queue.empty?
+      batches
+    end
+
+    # Caller holds @mutex. The next batch for a worker whose upload just
+    # finished, or nil when it should give its slot back.
+    def next_batch
+      return nil if @queue.empty? || !api_key?
+      return nil unless flush_immediately? || @draining.positive? || @queue.length >= BATCH_SIZE
+
+      batch = @queue.shift(MAX_UPLOAD_ENTRIES)
+      cancel_timer if @queue.empty?
       batch
+    end
+
+    # Caller holds @mutex. A remainder under BATCH_SIZE waits for the timer.
+    def release_slot
+      @active -= 1
+      start_timer unless @queue.empty?
+      @cond.broadcast
+    end
+
+    # SAFETY-008. Uploads run on background threads, never the request thread.
+    def start_workers(batches)
+      batches.each do |batch|
+        thread = Thread.new(batch) { |b| run_worker(b) }
+        thread.abort_on_exception = false
+        thread.report_on_exception = false
+      end
+    end
+
+    # One slot. It keeps sending while a backlog is waiting, then frees itself.
+    def run_worker(batch)
+      holding = true
+      while holding
+        send_batch(batch)
+        @mutex.synchronize do
+          batch = next_batch
+          holding = !batch.nil?
+          release_slot unless holding
+        end
+      end
+    ensure
+      @mutex.synchronize { release_slot } if holding
     end
 
     # Caller holds @mutex.
@@ -154,24 +252,16 @@ module Restless
       @timer = Thread.new do
         sleep(FLUSH_INTERVAL_MS / 1000.0)
         begin
-          batch = @mutex.synchronize do
+          batches = @mutex.synchronize do
             @timer = nil
-            @queue.empty? ? nil : take_batch_unsafe
+            take_batches(true)
           end
-          upload(batch) if batch
+          start_workers(batches)
         rescue StandardError => e
           Env.debug_log("flush timer failed: #{e.class}: #{e.message}")
         end
       end
       @timer.abort_on_exception = false
-    end
-
-    # Like take_batch but without cancelling the timer, which the timer thread
-    # has already cleared.
-    def take_batch_unsafe
-      batch = @queue
-      @queue = []
-      batch
     end
 
     # Caller holds @mutex.
@@ -181,20 +271,10 @@ module Restless
       timer.kill if timer && timer != Thread.current
     end
 
-    # SAFETY-008. The capture path performs no blocking I/O; uploads are
-    # asynchronous and fire-and-forget.
-    def upload_async(batch)
-      thread = Thread.new { upload(batch) }
-      thread.abort_on_exception = false
-      track(thread)
-    end
-
-    # `flush` joins these, so it also waits for an in-flight sampling report.
-    def track(thread)
-      @mutex.synchronize do
-        @inflight.reject! { |t| !t.alive? }
-        @inflight << thread
-      end
+    def join_reports
+      threads = @mutex.synchronize { @reports.dup }
+      threads.each { |t| t.join(HTTP_TIMEOUT_S) }
+      @mutex.synchronize { @reports.reject! { |t| !t.alive? } }
     end
 
     def send_sampling_report(report)
@@ -216,27 +296,13 @@ module Restless
       nil
     end
 
-    def join_inflight
-      threads = @mutex.synchronize { @inflight.dup }
-      threads.each { |t| t.join(HTTP_TIMEOUT_S) }
-      @mutex.synchronize { @inflight.reject! { |t| !t.alive? } }
-    end
-
-    def upload(batch)
-      return if batch.nil? || batch.empty?
-
-      # BATCH-007. No key: drop the batch, never retry or accumulate.
-      unless api_key?
-        Env.debug_log("no API key -- dropping batch of #{batch.length}")
-        return
-      end
-
+    # One upload, holding its slot through any retries. Only what the ingest
+    # certainly did not store is resent (WIRE-024, WIRE-026, WIRE-027).
+    def send_batch(batch)
       fingerprints = distinct_fingerprints(batch)
-      payload = batch.map { |captured| entry_for(captured) }
+      # WIRE-004: a JSON ARRAY, even for a single capture.
+      body = JSON.generate(batch.map { |captured| entry_for(captured) })
       url = "#{@base_url}/v1/request" # WIRE-001
-
-      Env.debug_log("uploading #{batch.length} entr#{batch.length == 1 ? 'y' : 'ies'} to #{url}")
-
       headers = {
         "Content-Type" => "application/json",           # WIRE-002
         "Authorization" => "Bearer #{@api_key}",        # WIRE-003
@@ -245,21 +311,83 @@ module Restless
       }
       headers["x-restless-sampling"] = @sampling_hash if @sampling_hash # SAMPLE-052
 
-      # WIRE-004: a JSON ARRAY, even for a single capture.
-      status, body = send_request(url, headers, JSON.generate(payload))
+      attempt = 0
+      loop do
+        Env.debug_log("uploading #{batch.length} entr#{batch.length == 1 ? 'y' : 'ies'} to #{url}" \
+                      "#{attempt.positive? ? " (retry #{attempt})" : ''}")
+        begin
+          status, response_body, response_headers = send_request(url, headers, body)
+        rescue *NOT_SENT_ERRORS => e
+          raise unless attempt < MAX_RETRIES
 
-      # WIRE-024: a non-2xx is never retried and never raises. The batch is
-      # dropped.
-      unless status && status >= 200 && status < 300
+          Env.debug_log("upload not sent (#{e.class}); retrying")
+          pause(retry_delay(nil, attempt))
+          attempt += 1
+          next
+        end
+
+        if status.is_a?(Integer) && status >= 200 && status < 300
+          handle_response(response_body, fingerprints)
+          return
+        end
+
+        if [503, 429].include?(status) && attempt < MAX_RETRIES
+          wait = retry_delay(header_value(response_headers, "retry-after"), attempt)
+          Env.debug_log("upload refused (#{status}); retrying in #{(wait * 1000).round}ms")
+          pause(wait)
+          attempt += 1
+          next
+        end
+
         Env.debug_log("upload failed: #{status.inspect}")
         return
       end
-
-      handle_response(body, fingerprints)
     rescue StandardError => e
-      # SAFETY-004.
+      # SAFETY-004. Timeouts and resets land here and are never retried.
       Env.debug_log("upload error: #{e.class}: #{e.message}")
       nil
+    end
+
+    # WIRE-026: the server's Retry-After (seconds or an HTTP date), else
+    # jittered exponential backoff; either way capped.
+    def retry_delay(retry_after, attempt)
+      seconds = parse_retry_after(retry_after)
+      if seconds.nil? || !seconds.finite? || seconds.negative?
+        seconds = RETRY_BASE_S * (2**attempt) * (0.5 + rand)
+      end
+      [seconds, MAX_RETRY_DELAY_S].min
+    end
+
+    def parse_retry_after(value)
+      text = value.to_s.strip
+      return nil if text.empty?
+
+      begin
+        Float(text)
+      rescue ArgumentError
+        begin
+          Time.httpdate(text) - Time.now
+        rescue ArgumentError
+          nil
+        end
+      end
+    end
+
+    def header_value(headers, name)
+      return nil unless headers.respond_to?(:each_pair)
+
+      headers.each_pair do |key, value|
+        next unless key.to_s.casecmp(name).zero?
+
+        return value.is_a?(Array) ? value.first : value
+      end
+      nil
+    end
+
+    def pause(seconds)
+      return @sleeper.call(seconds) if @sleeper
+
+      sleep(seconds) if seconds.positive?
     end
 
     def send_request(url, headers, body)
@@ -270,11 +398,15 @@ module Restless
       http.use_ssl = uri.scheme == "https"
       http.open_timeout = HTTP_TIMEOUT_S
       http.read_timeout = HTTP_TIMEOUT_S
+      http.write_timeout = HTTP_TIMEOUT_S if http.respond_to?(:write_timeout=)
+      # Net::HTTP never resends a POST anyway; zero keeps WIRE-027 explicit.
+      http.max_retries = 0 if http.respond_to?(:max_retries=)
       request = Net::HTTP::Post.new(uri.request_uri)
       headers.each { |k, v| request[k] = v }
       request.body = body
-      response = http.request(request)
-      [response.code.to_i, response.body]
+      # The per-operation timeouts above do not bound the whole exchange.
+      response = Timeout.timeout(HTTP_TIMEOUT_S) { http.request(request) }
+      [response.code.to_i, response.body, response.to_hash]
     end
 
     # WIRE-020..023.

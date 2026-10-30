@@ -188,6 +188,15 @@ and swallowed (surfaced only under `DEBUG=restless`). Uploads happen on a
 background thread and are fire-and-forget. Streaming responses
 (`text/event-stream`) and bodies over 1 MiB are never buffered.
 
+It also stays bounded when Restless is slow or busy. At most 4 uploads run at
+once, each with a 10 s timeout; captures queue behind them (up to 1000, oldest
+dropped first) and a freed slot sends up to 100 at a time to catch up. An
+upload Restless turns away with `503` or `429` is retried up to twice, waiting
+for its `Retry-After` (at most 10 s). Anything Restless may already have
+stored, such as a `502`, `504`, timeout or dropped connection, is never resent,
+so a log is never doubled. `flush` waits for all of it, retries included. A
+worker forked by Puma or Unicorn starts with its own empty queue.
+
 An exception your app raises is captured with its stack - so the error
 fingerprint keys on the method that raised, not on the middleware - and then
 re-raised untouched, leaving your own error handling completely unaffected.
@@ -203,7 +212,7 @@ re-raised untouched, leaving your own error handling completely unaffected.
 
 ## Conformance
 
-This SDK implements version 1.2.0 of the Restless SDK Contract at level L2,
+This SDK implements version 1.3.0 of the Restless SDK Contract at level L2,
 and is verified against the shared cross-language conformance vectors and a
 differential fuzzer run against the reference implementation. See
 [CONFORMANCE.md](./CONFORMANCE.md).
