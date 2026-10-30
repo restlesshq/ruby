@@ -50,7 +50,7 @@ The client exposes four things:
 | `setup(&block)` | Register the per-request callback. Takes a block or any callable. |
 | `mask(key)` | Hash an end-user API key for safe logging. |
 | `rack` | The middleware factory to mount. |
-| `flush` | Force-upload the current batch (e.g. before exit). |
+| `flush` | Upload everything queued and wait for it, retries included (e.g. before exit). |
 
 `Restless.new` and `Restless::Client.new` are the same thing. `mask` is also available as `Restless.mask` without a client, for scripts and tests.
 
@@ -299,7 +299,16 @@ The handler never runs. The response body is JSON `{"error": "<message>"}`. `enr
 | `DEBUG=restless` | Print upload diagnostics to stderr |
 | `RESTLESS_SETUP_MODE=1` | Upload even under a test runner (see below) |
 
-Batching is fixed: 10 requests per batch, a 5000 ms flush interval, a 1000-entry queue that drops oldest on overflow, and immediate flushing against a localhost base URL. Uploads never block a response, and failures are swallowed unless `DEBUG=restless`.
+Batching is fixed, with no config:
+
+- 10 requests per batch, a 5000 ms flush interval, and immediate flushing outside production or against a localhost base URL
+- A 1000-entry queue that drops oldest on overflow
+- At most 4 uploads in flight; while capped, each freed slot sends up to 100 queued entries
+- Upload timeout: 10 s
+- Retries: only `503`/`429` (honouring `Retry-After`, max 2 retries, max 10 s wait) and connections that never reached the ingest (refused, DNS failure). Never `502`/`504`, timeouts or dropped connections, which the ingest may already have stored.
+- Safe under forking servers (Puma, Unicorn): a forked worker starts with an empty queue and its own uploads.
+
+Uploads run on background threads and never block a response. Failures are swallowed unless `DEBUG=restless`. There is nothing to configure here and nothing to add to the user's code.
 
 **Test runs do not upload.** Detected via `RAILS_ENV`/`RACK_ENV` of `test`, or RSpec / Minitest / Test::Unit being loaded. Capture still runs, so your tests exercise the real path.
 

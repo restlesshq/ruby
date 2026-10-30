@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Spec version** | 1.2.0 |
+| **Spec version** | 1.3.0 |
 | **Level** | L2 (core + batching, caches, injection, safety) |
 | **Reference** | `restlesshq/node` (`@restlessai/sdk`) |
 | **Driver** | `ruby exe/restless-conformance` |
@@ -79,6 +79,11 @@ the reference. They are the reason this SDK is byte-compatible.
 | INJECT-005 | `Text.ws_trim`, not `String#strip`. Ruby's strip removes NUL and leaves NBSP; the contract wants exactly the PRIM-002 set. |
 | BATCH-003 | The environment indicator is `RESTLESS_ENV`, then `RACK_ENV`, then `RAILS_ENV`. Ruby has three spellings in the wild and no single winner. |
 | BATCH-008 | Test detection keys on those same variables being `test`, plus `RSpec::Core`, `Minitest::Test` and `Test::Unit::TestCase` being defined. |
+| BATCH-009 | A slot is a worker thread, counted under the uploader's `Mutex`. A worker that finishes takes the next batch itself (up to 100, BATCH-010) instead of handing off, and releases its slot in an `ensure`, so a killed thread cannot leak one. `flush` waits on a `ConditionVariable` that every release broadcasts. |
+| BATCH-009 (forking) | Puma and Unicorn fork after the app loads. The child inherits the slot count and queue but none of the threads behind them, so a stale count would block uploads forever. The uploader records `Process.pid` and starts the child from a clean state (new `Mutex`, empty queue, zero slots). The parent's queue is dropped in the child rather than sent twice. |
+| WIRE-026 | "Never reached the ingest" is `Errno::ECONNREFUSED` and `SocketError` (DNS). `Net::HTTP` re-raises a connect failure with the same class, so the classification holds on a real socket (`test/test_uploader.rb` checks one). `Retry-After` is parsed with `Float()` (seconds) and then `Time.httpdate`. |
+| WIRE-027 | `Net::ReadTimeout`, `Net::OpenTimeout`, `Timeout::Error`, `Errno::ECONNRESET`, `EOFError` and everything else fall through to the drop. `max_retries = 0` keeps `Net::HTTP` from resending on its own. |
+| WIRE-028 | `open_timeout`, `read_timeout` and `write_timeout` are per operation, so a slow-trickling response could outlive them. The whole exchange also runs inside `Timeout.timeout(10)`. |
 | CACHE-* | Both caches are Mutex-guarded. Puma, Falcon and threaded Unicorn all serve requests on many threads, so an unsynchronized Hash is a real race. |
 
 ## Exemption: PRIM-034 (unpaired surrogates)

@@ -582,10 +582,12 @@ class TestMiddleware < Minitest::Test
       uploader.push(capture(9_999))
       uploader.flush
 
-      batch = recorder.batches.first
-      assert_equal Restless::Uploader::MAX_QUEUE, batch.length
-      assert_equal "1", batch.first["_id"], "the OLDEST entry should have been dropped"
-      assert_equal "9999", batch.last["_id"]
+      # BATCH-010 splits the drain into uploads of 100, landing in any order.
+      ids = recorder.entries.map { |entry| entry["_id"] }
+      assert_equal Restless::Uploader::MAX_QUEUE, ids.length
+      refute_includes ids, "0", "the OLDEST entry should have been dropped"
+      assert_includes ids, "1"
+      assert_includes ids, "9999"
     end
   end
 
