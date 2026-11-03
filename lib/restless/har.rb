@@ -8,6 +8,58 @@ module Restless
   module Har
     module_function
 
+    # HAR-013. The scheme the client used, for the logged `request.url`.
+    #
+    # A TLS-terminating proxy (Render, Heroku, an ALB, nginx) hands the app
+    # plain HTTP, so `rack.url_scheme` alone logs every request as `http://`.
+    # The first hop's `Forwarded: proto=` wins, then the first
+    # `X-Forwarded-Proto` value, then the transport. Only `http` and `https`
+    # are accepted from a header; anything else falls through.
+    #
+    # Deliberately not `Rack::Request#scheme`: it also honours
+    # `X-Forwarded-Scheme` and `X-Forwarded-Ssl`, and newer Rack takes the
+    # LAST `X-Forwarded-Proto` value, so it disagrees with the contract.
+    #
+    # `split(..., -1)` throughout: without the negative limit Ruby returns an
+    # empty array for "," where JavaScript returns two empty strings.
+    def request_scheme(headers, encrypted)
+      forwarded = header_value(headers, "forwarded")
+      if forwarded
+        first_hop = forwarded.split(",", -1).first.to_s
+        first_hop.split(";", -1).each do |pair|
+          eq = pair.index("=")
+          next if eq.nil? || Text.ws_trim(pair[0...eq]).downcase != "proto"
+
+          scheme = valid_scheme(pair[(eq + 1)..])
+          return scheme if scheme
+        end
+      end
+      xfp = header_value(headers, "x-forwarded-proto")
+      scheme = xfp && valid_scheme(xfp.split(",", -1).first.to_s)
+      return scheme if scheme
+
+      encrypted ? "https" : "http"
+    end
+
+    # First non-empty value under a case-insensitive name. A repeated header
+    # counts as its first occurrence.
+    def header_value(headers, name)
+      headers.each do |key, value|
+        next unless key.to_s.downcase == name
+
+        value = value.first if value.is_a?(Array)
+        return value if value.is_a?(String) && !value.empty?
+      end
+      nil
+    end
+
+    def valid_scheme(raw)
+      s = Text.ws_trim(raw.to_s)
+      s = s[1...-1] if s.length >= 2 && s.start_with?('"') && s.end_with?('"')
+      s = s.downcase
+      %w[http https].include?(s) ? s : nil
+    end
+
     # HAR-005. Parse the query into ordered name/value pairs.
     #
     # Hand-rolled rather than delegating to a URI library so it shares the

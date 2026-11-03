@@ -3,6 +3,7 @@
 require "json"
 
 require_relative "capture"
+require_relative "har"
 require_relative "injection"
 require_relative "request_id"
 require_relative "stack_frames"
@@ -157,8 +158,13 @@ module Restless
              request_body: request_body, stack_frame: frame)
     end
 
+    # HAR-013: behind a TLS-terminating proxy the forwarded headers, not
+    # `rack.url_scheme`, say what the client used.
     def self.full_url(env)
-      scheme = env["rack.url_scheme"] || "http"
+      scheme = Har.request_scheme(
+        { "forwarded" => env["HTTP_FORWARDED"], "x-forwarded-proto" => env["HTTP_X_FORWARDED_PROTO"] },
+        env["rack.url_scheme"] == "https"
+      )
       host = env["HTTP_HOST"] || "#{env['SERVER_NAME']}:#{env['SERVER_PORT']}"
       url = +"#{scheme}://#{host}#{env['SCRIPT_NAME']}#{env['PATH_INFO']}"
       query = env["QUERY_STRING"].to_s

@@ -156,6 +156,38 @@ class TestMiddleware < Minitest::Test
     assert_equal "Bearer proj_key", recorder.headers.first["Authorization"] # WIRE-003
   end
 
+  # --- logged URL scheme (HAR-013) ---------------------------------------
+
+  def logged_url(headers = {}, scheme: "http")
+    recorder = Recorder.new
+    c = client(recorder)
+    mw = c.rack.new(json_app(200, { "ok" => true }))
+    env = env_for("/v1/ping", query: "x=1", headers: headers)
+    env["rack.url_scheme"] = scheme
+    mw.call(env)
+    c.flush
+    recorder.entries.first["request"]["log"]["entries"].first["request"]["url"]
+  end
+
+  # RES-21: Render terminates TLS and forwards plain HTTP.
+  def test_x_forwarded_proto_https_is_logged_as_https
+    assert_equal "https://localhost:8086/v1/ping?x=1", logged_url({ "x-forwarded-proto" => "https" })
+  end
+
+  def test_first_x_forwarded_proto_value_wins
+    assert_equal "https://localhost:8086/v1/ping?x=1", logged_url({ "x-forwarded-proto" => "https, http" })
+  end
+
+  def test_forwarded_proto_is_logged
+    assert_equal "https://localhost:8086/v1/ping?x=1",
+                 logged_url({ "forwarded" => "for=192.0.2.60;proto=https;by=203.0.113.43" })
+  end
+
+  def test_plain_request_without_forwarding_headers_stays_http
+    assert_equal "http://localhost:8086/v1/ping?x=1", logged_url
+    assert_equal "https://localhost:8086/v1/ping?x=1", logged_url(scheme: "https")
+  end
+
   # --- redaction choke point ---------------------------------------------
 
   def test_redaction_runs_before_upload

@@ -86,6 +86,8 @@ module Restless
       # --- HAR (section 7) ---
       when "harEntry"
         Har.to_har_entry(hash(input["captured"]))
+      when "requestScheme"
+        Har.request_scheme(hash(input["headers"]), input["encrypted"] == true)
 
       # --- sampling (section 12.1) ---
       # Routes come back as sorted [key, mode] pairs so the comparison pins
