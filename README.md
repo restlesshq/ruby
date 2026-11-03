@@ -212,7 +212,7 @@ re-raised untouched, leaving your own error handling completely unaffected.
 
 ## Conformance
 
-This SDK implements version 1.3.0 of the Restless SDK Contract at level L2,
+This SDK implements version 1.4.0 of the Restless SDK Contract at level L2,
 and is verified against the shared cross-language conformance vectors and a
 differential fuzzer run against the reference implementation. See
 [CONFORMANCE.md](./CONFORMANCE.md).
